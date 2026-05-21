@@ -92,15 +92,231 @@ async function loadTopology({ forceAuto = false } = {}) {
   finally { els.refreshBtn.disabled = false; els.refreshBtn.textContent = "Refresh"; }
 }
 
+
+function roleTag(role) {
+  return `<span class="tag">${escapeHtml(role || "unknown")}</span>`;
+}
+
+function vendorTag(vendor) {
+  return `<span class="tag">${escapeHtml(vendor || "unknown")}</span>`;
+}
+
+function endpointRow(name, path) {
+  return `
+    <div class="item endpoint-row" data-endpoint="${escapeHtml(path)}">
+      <div class="item-title">
+        <span>${escapeHtml(name)}</span>
+        <span class="endpoint-state">not checked</span>
+      </div>
+      <div class="item-sub">${escapeHtml(path)}</div>
+    </div>
+  `;
+}
+
+async function runEndpointDiagnostics() {
+  const rows = [...document.querySelectorAll("[data-endpoint]")];
+
+  for (const row of rows) {
+    const path = row.dataset.endpoint;
+    const state = row.querySelector(".endpoint-state");
+    state.textContent = "checking...";
+
+    try {
+      const res = await fetch(path, { cache: "no-store" });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        state.textContent = "ok";
+        state.className = "endpoint-state good-text";
+      } else {
+        state.textContent = `error ${res.status}`;
+        state.className = "endpoint-state bad-text";
+      }
+    } catch (err) {
+      state.textContent = "failed";
+      state.className = "endpoint-state bad-text";
+    }
+  }
+}
+
+function copyDiagnostics() {
+  const payload = {
+    generatedAt: topology?.generatedAt,
+    mode: topology?.mode,
+    source: topology?.source,
+    summary: topology?.summary,
+    settings: topology?.settings,
+    vendors: topology?.summary?.vendorCounts,
+    roles: topology?.summary?.roleCounts
+  };
+
+  navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+    .then(() => showToast("Diagnostics copied to clipboard."))
+    .catch(() => showToast("Could not copy diagnostics."));
+}
+
 function setPill(text, kind = "neutral") { els.panelStatus.textContent = text; els.panelStatus.className = `pill ${kind}`; }
 function tagRows(obj) { return Object.entries(obj || {}).map(([k,v]) => `<span class="tag">${esc(k)}: ${v}</span>`).join(""); }
 function showMapPanel() { els.panelTitle.textContent = "Map"; els.panelSub.textContent = "Click a node or link to inspect it."; setPill("ready"); els.panelBody.innerHTML = `<p class="empty">This map is built from LibreNMS devices, discovered links, interface counters, and alerts. Drag nodes to adjust the layout; your browser saves the positions.</p><h3>Roles</h3><div class="tag-row">${tagRows(topology.summary?.roleCounts)}</div><h3>Vendors</h3><div class="tag-row">${tagRows(topology.summary?.vendorCounts)}</div><div class="kv"><span>Layout</span><strong>Generic enterprise fabric</strong></div><div class="kv"><span>Traffic</span><strong>Animated from interface counters</strong></div><div class="kv"><span>Refresh</span><strong>${Number(els.refreshInterval.value) / 1000}s</strong></div>`; }
 function showOverview() { const s = topology.summary, busiestLinks = [...topology.links].sort((a,b) => Math.max(b.inMbps,b.outMbps) - Math.max(a.inMbps,a.outMbps)).slice(0,5), busiestPorts = [...topology.ports].sort((a,b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)).slice(0,5); els.panelTitle.textContent = "Overview"; els.panelSub.textContent = "Network health, vendors, roles, and busiest interfaces."; setPill(topology.mode, topology.mode === "mock" ? "warn" : "good"); els.panelBody.innerHTML = `<div class="kv"><span>Devices</span><strong>${s.totalDevices}</strong></div><div class="kv"><span>Interfaces</span><strong>${s.totalPorts}</strong></div><div class="kv"><span>Links</span><strong>${s.totalLinks}</strong></div><div class="kv"><span>Traffic</span><strong>${fmtMbps(s.totalInMbps + s.totalOutMbps)}</strong></div><div class="kv"><span>Alerts</span><strong>${s.activeAlerts}</strong></div><h3>Vendors</h3><div class="tag-row">${tagRows(s.vendorCounts)}</div><h3>Busiest Interfaces</h3><div class="list">${busiestPorts.map(portCard).join("") || `<p class="empty">No interface counters found.</p>`}</div><h3>Busiest Links</h3><div class="list">${busiestLinks.map(linkCard).join("") || `<p class="empty">No links found.</p>`}</div>`; }
-function showDevices() { const devices = [...topology.devices].sort((a,b) => rank(a) - rank(b) || a.label.localeCompare(b.label)); els.panelTitle.textContent = "Devices"; els.panelSub.textContent = `${devices.length} monitored devices.`; setPill("inventory"); els.panelBody.innerHTML = `<div class="table"><div class="table-row header"><span>Device</span><span>Role</span><span>Vendor</span><span>Ports</span><span>Traffic</span><span>Alerts</span></div>${devices.map(d => `<div class="table-row clickable item" data-node="${esc(d.id)}"><strong>${esc(d.label)}</strong><span><i class="role-dot" style="background:${colorByRole(d)}"></i>${esc(d.role)}</span><span>${esc(d.vendor || "unknown")}</span><span>${d.upPorts || 0}/${d.ports || 0}</span><span>${fmtMbps((d.trafficInMbps || 0) + (d.trafficOutMbps || 0))}</span><span>${d.alerts || 0}</span></div>`).join("")}</div>`; els.panelBody.querySelectorAll("[data-node]").forEach(el => el.addEventListener("click", () => { const node = cy.getElementById(el.dataset.node); if (node.length) { cy.animate({ center:{ eles:node }, zoom:1.05 }, { duration:300 }); node.select(); focusNeighborhood(node); showDevice(node.data("raw")); } })); }
-function showInterfaces() { const ports = [...topology.ports].sort((a,b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)); els.panelTitle.textContent = "Interfaces"; els.panelSub.textContent = `${ports.length} interfaces with LibreNMS counters.`; setPill("ports"); els.panelBody.innerHTML = `<div class="table"><div class="table-row header"><span>Interface</span><span>Device</span><span>Status</span><span>Speed</span><span>Traffic</span><span>Util</span></div>${ports.map(p => `<div class="table-row item"><strong title="${esc(p.ifAlias || "")}">${esc(p.name)}</strong><span>${esc(p.device_label || p.device_id)}</span><span>${esc(p.ifOperStatus || "unknown")}</span><span>${esc(p.speedLabel || "unknown")}</span><span>down ${fmtMbps(p.inMbps)} up ${fmtMbps(p.outMbps)}</span><span>${fmtPct(p.utilPct)}</span></div>`).join("") || `<p class="empty">No interfaces returned from LibreNMS.</p>`}</div>`; }
-function showLinks() { const links = [...topology.links].sort((a,b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)); els.panelTitle.textContent = "Links"; els.panelSub.textContent = `${links.length} discovered topology links.`; setPill("traffic"); els.panelBody.innerHTML = `<div class="list">${links.map(linkCard).join("") || `<p class="empty">No discovered links found.</p>`}</div>`; }
+function showDevices() {
+  const devices = [...topology.devices].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
+  const roleCounts = topology.summary?.roleCounts || {};
+  const vendorCounts = topology.summary?.vendorCounts || {};
+
+  els.panelTitle.textContent = "Devices";
+  els.panelSub.textContent = `${devices.length} monitored devices from LibreNMS.`;
+  setPill(`${devices.length} devices`);
+
+  els.panelBody.innerHTML = `
+    <div class="tag-row">
+      ${Object.entries(roleCounts).map(([k, v]) => `<span class="tag">${escapeHtml(k)}: ${v}</span>`).join("")}
+    </div>
+    <div class="tag-row">
+      ${Object.entries(vendorCounts).map(([k, v]) => `<span class="tag">${escapeHtml(k)}: ${v}</span>`).join("")}
+    </div>
+
+    <div class="table device-table">
+      <div class="table-row header">
+        <span>Device</span><span>Role</span><span>Vendor</span><span>IP</span><span>Ports</span><span>Traffic</span><span>Alerts</span>
+      </div>
+      ${devices.map(d => `
+        <div class="table-row clickable item" data-node="${escapeHtml(d.id)}">
+          <strong title="${escapeHtml(d.hostname || d.label)}">${escapeHtml(d.label)}</strong>
+          <span><i class="role-dot" style="background:${colorByRole(d)}"></i>${escapeHtml(d.role)}</span>
+          <span>${escapeHtml(d.vendor || "unknown")}</span>
+          <span>${escapeHtml(d.ip || "—")}</span>
+          <span>${d.upPorts || 0}/${d.ports || 0}</span>
+          <span>${fmtMbps((d.trafficInMbps || 0) + (d.trafficOutMbps || 0))}</span>
+          <span>${d.alerts || 0}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  els.panelBody.querySelectorAll("[data-node]").forEach(el => {
+    el.addEventListener("click", () => {
+      const node = cy.getElementById(el.dataset.node);
+      if (node.length) {
+        activeView = "map";
+        setActiveNav("map");
+        cy.animate({ center: { eles: node }, zoom: 1.05 }, { duration: 300 });
+        node.select();
+        focusNeighborhood(node);
+        showDevice(node.data("raw"));
+      }
+    });
+  });
+}
+
+
+function showInterfaces() {
+  const ports = [...topology.ports].sort((a, b) => Number(b.utilPct || 0) - Number(a.utilPct || 0));
+  const up = ports.filter(p => String(p.ifOperStatus).toLowerCase() === "up").length;
+  const down = ports.length - up;
+
+  els.panelTitle.textContent = "Interfaces";
+  els.panelSub.textContent = `${ports.length} interfaces. ${up} up / ${down} down.`;
+  setPill(`${ports.length} ports`);
+
+  els.panelBody.innerHTML = `
+    <div class="tag-row">
+      <span class="tag">up: ${up}</span>
+      <span class="tag">down: ${down}</span>
+      <span class="tag">traffic: ${fmtMbps(ports.reduce((sum, p) => sum + Number(p.inMbps || 0) + Number(p.outMbps || 0), 0))}</span>
+    </div>
+
+    <div class="table interface-table">
+      <div class="table-row header">
+        <span>Interface</span><span>Device</span><span>Alias</span><span>Status</span><span>Speed</span><span>Traffic</span><span>Util</span>
+      </div>
+      ${ports.map(p => `
+        <div class="table-row item">
+          <strong title="${escapeHtml(p.ifDescr || p.name)}">${escapeHtml(p.name)}</strong>
+          <span>${escapeHtml(p.device_label || p.device_id)}</span>
+          <span title="${escapeHtml(p.ifAlias || "")}">${escapeHtml(p.ifAlias || "—")}</span>
+          <span class="${String(p.ifOperStatus).toLowerCase() === "up" ? "good-text" : "bad-text"}">${escapeHtml(p.ifOperStatus || "unknown")}</span>
+          <span>${escapeHtml(p.speedLabel || "unknown")}</span>
+          <span>↓ ${fmtMbps(p.inMbps)} ↑ ${fmtMbps(p.outMbps)}</span>
+          <span>${fmtPct(p.utilPct)}</span>
+        </div>
+      `).join("") || `<p class="empty">No interfaces returned from LibreNMS.</p>`}
+    </div>
+  `;
+}
+
+
+function showLinks() {
+  const links = [...topology.links].sort((a, b) => Number(b.utilPct || 0) - Number(a.utilPct || 0));
+  els.panelTitle.textContent = "Links";
+  els.panelSub.textContent = `${links.length} LLDP/CDP/xDP discovered topology links.`;
+  setPill(`${links.length} links`);
+
+  els.panelBody.innerHTML = `
+    <div class="table link-table">
+      <div class="table-row header">
+        <span>Local</span><span>Local Port</span><span>Remote</span><span>Remote Port</span><span>Speed</span><span>Traffic</span><span>Util</span>
+      </div>
+      ${links.map(l => `
+        <div class="table-row item">
+          <strong>${escapeHtml(l.localDeviceLabel || l.source)}</strong>
+          <span title="${escapeHtml(l.localPortName || "")}">${escapeHtml(l.localPortName || "—")}</span>
+          <strong>${escapeHtml(l.remoteDeviceLabel || l.target)}</strong>
+          <span title="${escapeHtml(l.remotePortName || "")}">${escapeHtml(l.remotePortName || "—")}</span>
+          <span>${escapeHtml(l.speedLabel || "unknown")}</span>
+          <span>↓ ${fmtMbps(l.inMbps)} ↑ ${fmtMbps(l.outMbps)}</span>
+          <span>${fmtPct(l.utilPct)}</span>
+        </div>
+      `).join("") || `<p class="empty">No discovered links found.</p>`}
+    </div>
+  `;
+}
+
+
 function showAlerts() { const alerts = topology.alerts || []; els.panelTitle.textContent = "Alerts"; els.panelSub.textContent = `${alerts.length} active alert records.`; setPill(alerts.length ? "active" : "clear", alerts.length ? "warn" : "good"); els.panelBody.innerHTML = `<div class="list">${alerts.map(a => `<div class="item"><div class="item-title"><span>${esc(a.title || a.rule || a.name || "Alert")}</span><span>${esc(a.severity || a.state || "active")}</span></div><div class="item-sub">${esc(a.hostname || a.device || a.device_id || "")} | ${esc(a.timestamp || a.time_logged || "")}</div></div>`).join("") || `<p class="empty">No active alerts returned.</p>`}</div>`; }
-function showSettings() { const settings = topology.settings || {}; els.panelTitle.textContent = "Settings"; els.panelSub.textContent = "Runtime settings live in the server .env file."; setPill("config"); els.panelBody.innerHTML = `<div class="kv"><span>Mode</span><strong>${esc(topology.mode)}</strong></div><div class="kv"><span>Source</span><strong>${esc(topology.source)}</strong></div><div class="kv"><span>Default refresh</span><strong>${Number(settings.defaultRefreshMs || 0) / 1000}s</strong></div><div class="kv"><span>Hide down ports</span><strong>${settings.hideDownInterfaces ? "yes" : "no"}</strong></div><div class="kv"><span>Layout</span><strong>Saved in browser local storage</strong></div><p class="empty">Classifier hints for Aruba, Juniper, Mist, firewalls, access switches, and server devices are configured in .env.</p>`; }
+function showSettings() {
+  const settings = topology.settings || {};
+  const s = topology.summary || {};
+
+  els.panelTitle.textContent = "Settings";
+  els.panelSub.textContent = "Runtime diagnostics and dashboard behavior.";
+  setPill("diagnostics");
+
+  els.panelBody.innerHTML = `
+    <h3>Runtime</h3>
+    <div class="kv"><span>Mode</span><strong>${escapeHtml(topology.mode)}</strong></div>
+    <div class="kv"><span>Source</span><strong>${escapeHtml(topology.source)}</strong></div>
+    <div class="kv"><span>Updated</span><strong>${escapeHtml(new Date(topology.generatedAt).toLocaleString())}</strong></div>
+    <div class="kv"><span>Default refresh</span><strong>${Number(settings.defaultRefreshMs || Number(els.refreshInterval.value)) / 1000}s</strong></div>
+    <div class="kv"><span>Hide down interfaces</span><strong>${settings.hideDownInterfaces ? "yes" : "no"}</strong></div>
+
+    <h3>Current Dataset</h3>
+    <div class="kv"><span>Devices</span><strong>${s.totalDevices || 0}</strong></div>
+    <div class="kv"><span>Interfaces</span><strong>${s.totalPorts || 0}</strong></div>
+    <div class="kv"><span>Links</span><strong>${s.totalLinks || 0}</strong></div>
+    <div class="kv"><span>Traffic</span><strong>${fmtMbps((s.totalInMbps || 0) + (s.totalOutMbps || 0))}</strong></div>
+
+    <h3>Endpoint Diagnostics</h3>
+    <div class="list">
+      ${endpointRow("Health", "/api/health")}
+      ${endpointRow("Topology", "/api/topology")}
+      ${endpointRow("Devices", "/api/devices")}
+      ${endpointRow("Interfaces", "/api/interfaces")}
+      ${endpointRow("Links", "/api/links")}
+    </div>
+
+    <div class="button-row">
+      <button id="runDiagnosticsBtn">Run checks</button>
+      <button id="copyDiagnosticsBtn">Copy diagnostics</button>
+    </div>
+
+    <p class="empty">Classification hints, LibreNMS URL, token, mock mode, and refresh defaults are controlled in the server .env file.</p>
+  `;
+
+  document.getElementById("runDiagnosticsBtn")?.addEventListener("click", runEndpointDiagnostics);
+  document.getElementById("copyDiagnosticsBtn")?.addEventListener("click", copyDiagnostics);
+}
+
+
 function statusKind(d) { if (d.status !== "up") return "bad"; if ((d.alerts || 0) > 0) return "warn"; return "good"; }
 function showDevice(d) { const links = topology.links.filter(l => l.source === d.id || l.target === d.id), ports = topology.ports.filter(p => p.device_id === d.device_id).sort((a,b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)).slice(0,12); els.panelTitle.textContent = d.label; els.panelSub.textContent = `${d.role.toUpperCase()} | ${d.vendor || "unknown"} | ${d.ip || d.hostname || "No IP"}`; setPill(d.status, statusKind(d)); els.panelBody.innerHTML = `<div class="kv"><span>Hostname</span><strong>${esc(d.hostname || d.sysName || "-")}</strong></div><div class="kv"><span>IP</span><strong>${esc(d.ip || "-")}</strong></div><div class="kv"><span>Role</span><strong>${esc(d.role || "-")}</strong></div><div class="kv"><span>Vendor</span><strong>${esc(d.vendor || "unknown")}</strong></div><div class="kv"><span>OS</span><strong>${esc(d.os || "-")}</strong></div><div class="kv"><span>Hardware</span><strong>${esc(d.hardware || "-")}</strong></div><div class="kv"><span>Location</span><strong>${esc(d.location || "-")}</strong></div><div class="kv"><span>Ports</span><strong>${d.upPorts || 0}/${d.ports || 0} up</strong></div><div class="kv"><span>Traffic</span><strong>down ${fmtMbps(d.trafficInMbps)} up ${fmtMbps(d.trafficOutMbps)}</strong></div><div class="kv"><span>Alerts</span><strong>${d.alerts || 0}</strong></div><h3>Top Interfaces</h3><div class="list">${ports.map(portCard).join("") || `<p class="empty">No interfaces found for this device.</p>`}</div><h3>Connected Links</h3><div class="list">${links.map(linkCard).join("") || `<p class="empty">No links found for this device.</p>`}</div>`; }
 function showLink(l) { const src = topology.devices.find(d => d.id === l.source), dst = topology.devices.find(d => d.id === l.target); els.panelTitle.textContent = `${src?.label || l.source} -> ${dst?.label || l.target}`; els.panelSub.textContent = `${l.localPortName || "port"} -> ${l.remotePortName || "port"}`; setPill(fmtPct(l.utilPct), Number(l.utilPct) >= 75 ? "warn" : "good"); els.panelBody.innerHTML = `<div class="kv"><span>Protocol</span><strong>${esc(l.protocol || "discovered")}</strong></div><div class="kv"><span>Local</span><strong>${esc(l.localDeviceLabel || src?.label || l.source)} | ${esc(l.localPortName || "port")}</strong></div><div class="kv"><span>Remote</span><strong>${esc(l.remoteDeviceLabel || dst?.label || l.target)} | ${esc(l.remotePortName || "port")}</strong></div><div class="kv"><span>Inbound</span><strong>${fmtMbps(l.inMbps)}</strong></div><div class="kv"><span>Outbound</span><strong>${fmtMbps(l.outMbps)}</strong></div><div class="kv"><span>Utilization</span><strong>${fmtPct(l.utilPct)}</strong></div><div class="kv"><span>Speed</span><strong>${esc(l.speedLabel || "-")}</strong></div><div class="kv"><span>Errors/sec</span><strong>In ${Number(l.inErrorsRate || 0)} / Out ${Number(l.outErrorsRate || 0)}</strong></div><div class="kv"><span>Discards/sec</span><strong>In ${Number(l.inDiscardsRate || 0)} / Out ${Number(l.outDiscardsRate || 0)}</strong></div><div class="item"><div class="item-title"><span>Utilization</span><span>${fmtPct(l.utilPct)}</span></div><div class="bar"><i style="--w:${Math.min(Number(l.utilPct || 0), 100)}%; background:${colorByUtil(l.utilPct)}"></i></div></div>`; }

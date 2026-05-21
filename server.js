@@ -146,8 +146,8 @@ function buildResponse({ devices, links, ports, alerts, source, warnings = {} })
     devices, links, ports: filteredPorts, alerts,
     summary: {
       totalDevices: devices.length, upDevices: devices.filter(d => d.status === "up").length, downDevices: devices.filter(d => d.status !== "up").length,
-      totalLinks: links.length, totalPorts: filteredPorts.length, upPorts: filteredPorts.filter(p => p.ifOperStatus === "up").length,
-      downPorts: filteredPorts.filter(p => p.ifOperStatus && p.ifOperStatus !== "up").length,
+      totalLinks: links.length, totalPorts: filteredPorts.length, upPorts: filteredPorts.filter(p => String(p.ifOperStatus).toLowerCase() === "up").length,
+      downPorts: filteredPorts.filter(p => p.ifOperStatus && String(p.ifOperStatus).toLowerCase() !== "up").length,
       totalInMbps: links.reduce((sum, l) => sum + n(l.inMbps), 0), totalOutMbps: links.reduce((sum, l) => sum + n(l.outMbps), 0), activeAlerts: alerts.length,
       vendorCounts: countBy(devices, "vendor"), roleCounts: countBy(devices, "role")
     }, warnings
@@ -164,17 +164,35 @@ async function buildLiveTopology() {
   if (cache && now - cacheTime < CACHE_MS) return cache;
   const portColumns = ["port_id","device_id","ifName","ifAlias","ifDescr","ifType","ifSpeed","ifHighSpeed","ifOperStatus","ifAdminStatus","ifInOctets_rate","ifOutOctets_rate","ifInErrors_rate","ifOutErrors_rate","ifInDiscards_rate","ifOutDiscards_rate","poll_time","poll_period"].join(",");
   const [devicesPayload, linksPayload, portsPayload, alertsPayload] = await Promise.allSettled([
-    getJson("/api/v0/devices"), getJson("/api/v0/resources/links"), getJson(`/api/v0/ports?columns=${encodeURIComponent(portColumns)}`), getJson("/api/v0/alerts?state=1&order=timestamp%20DESC")
+    getJson("/api/v0/devices"), getJson("/api/v0/resources/links"), getPortsPayload(), getJson("/api/v0/alerts?state=1&order=timestamp%20DESC")
   ]);
   if (devicesPayload.status === "rejected") throw devicesPayload.reason;
   const rawDevices = asArray(devicesPayload.value, ["devices", "device"]);
   const rawLinks = linksPayload.status === "fulfilled" ? asArray(linksPayload.value, ["links"]) : [];
-  const rawPorts = portsPayload.status === "fulfilled" ? asArray(portsPayload.value, ["ports", "port"]) : [];
+  const rawPorts = portsPayload.status === "fulfilled" ? asArray(portsPayload.value, ["ports", "port", "interfaces", "ifaces", "data"]) : [];
   const rawAlerts = alertsPayload.status === "fulfilled" ? asArray(alertsPayload.value, ["alerts"]) : [];
   const devices = rawDevices.map(normalizeDevice).filter(d => d.role !== "exclude");
   const deviceById = new Map(devices.map(d => [d.device_id, d]));
+
+  const linkPortIds = rawLinks.flatMap(l => [
+    l.local_port_id,
+    l.remote_port_id
+  ]).filter(Boolean);
+
+  const directPortDetails = await getPortDetailsMap(linkPortIds);
+
+  for (const detailedPort of directPortDetails.values()) {
+    const id = String(detailedPort.port_id || detailedPort.id || "");
+    const idx = rawPorts.findIndex(p => String(p.port_id || p.id || "") === id);
+    if (idx >= 0) {
+      rawPorts[idx] = { ...rawPorts[idx], ...detailedPort };
+    } else {
+      rawPorts.push(detailedPort);
+    }
+  }
+
   const ports = rawPorts.map(p => normalizePort(p, deviceById));
-  const portById = new Map(ports.map(p => [p.port_id, p]));
+  const portById = new Map(ports.map(p => [String(p.port_id), p]));
   const links = rawLinks.map(l => normalizeLink(l, deviceById, portById)).filter(Boolean);
   const alertCounts = new Map();
   for (const alert of rawAlerts) alertCounts.set(s(alert.device_id), (alertCounts.get(s(alert.device_id)) || 0) + 1);
@@ -186,6 +204,85 @@ async function buildLiveTopology() {
   }});
   cacheTime = now;
   return cache;
+}
+
+
+async function getPortsPayload() {
+  // LibreNMS installs/versions can be picky about columns.
+  // Try a safe reduced column set first, then fall back to the full ports endpoint.
+  const safeColumns = [
+    "port_id",
+    "device_id",
+    "ifName",
+    "ifAlias",
+    "ifDescr",
+    "ifType",
+    "ifSpeed",
+    "ifHighSpeed",
+    "ifOperStatus",
+    "ifAdminStatus",
+    "ifInOctets_rate",
+    "ifOutOctets_rate",
+    "ifInErrors_rate",
+    "ifOutErrors_rate",
+    "poll_time",
+    "poll_period"
+  ].join(",");
+
+  const attempts = [
+    `/api/v0/ports?columns=${encodeURIComponent(safeColumns)}`,
+    "/api/v0/ports"
+  ];
+
+  let lastError = null;
+
+  for (const route of attempts) {
+    try {
+      const data = await getJson(route);
+      const ports = asArray(data, ["ports", "port", "interfaces", "ifaces", "data"]);
+      if (ports.length > 0) {
+        return data;
+      }
+      lastError = new Error(`No ports returned from ${route}`);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error("Unable to retrieve LibreNMS ports");
+}
+
+
+async function getPortDetail(portId) {
+  if (!portId) return null;
+
+  try {
+    const data = await getJson(`/api/v0/ports/${portId}`);
+    const ports = asArray(data, ["port", "ports", "data", "interfaces", "ifaces"]);
+    if (ports.length > 0) return ports[0];
+  } catch (err) {
+    console.warn(`LibreNMS port detail failed for ${portId}:`, err.message || err);
+  }
+
+  return null;
+}
+
+async function getPortDetailsMap(portIds) {
+  const uniqueIds = [...new Set(portIds.filter(Boolean).map(String))];
+
+  const results = await Promise.allSettled(
+    uniqueIds.map(async id => [id, await getPortDetail(id)])
+  );
+
+  const out = new Map();
+
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const [id, port] = result.value;
+    if (port) out.set(String(id), port);
+  }
+
+  return out;
 }
 
 function mockRate(base, spread, offset = 0) { const phase = Date.now() / 10000 + offset; return Math.max(0.01, base + Math.sin(phase) * spread + Math.cos(phase / 2) * spread / 2); }
@@ -214,6 +311,7 @@ async function currentTopology() {
   try { return await buildLiveTopology(); } catch (err) { if (MOCK_MODE === "auto") return mockTopology(`LibreNMS failed, auto fallback: ${err.message}`); throw err; }
 }
 
+const app = express();
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(cors());
 app.use(morgan("combined"));
