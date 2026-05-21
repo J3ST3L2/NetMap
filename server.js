@@ -20,6 +20,16 @@ const HIDE_DOWN_INTERFACES = String(process.env.HIDE_DOWN_INTERFACES || "false")
 const DEFAULT_REFRESH_MS = Number(process.env.DEFAULT_REFRESH_MS || 30000);
 const CACHE_MS = Number(process.env.CACHE_MS || 10000);
 
+// Large LibreNMS / work-environment tuning
+const SWITCH_ONLY_MODE = String(process.env.SWITCH_ONLY_MODE || "false").toLowerCase() === "true";
+const DEVICE_ROLE_ALLOWLIST = splitEnv("DEVICE_ROLE_ALLOWLIST", "");
+const SWITCH_DEVICE_MATCH = splitEnv(
+  "SWITCH_DEVICE_MATCH",
+  "switch,sw-,core,access,closet,idf,mdf,aruba,hpe,procurve,juniper,junos,ex2300,ex3400,ex4300,ex4400,qfx,cx,2930,3810,5400,6200,6300,6400,8320"
+);
+const MAX_TOPOLOGY_LINKS = Number(process.env.MAX_TOPOLOGY_LINKS || 0);
+const PORT_DETAIL_LIMIT = Number(process.env.PORT_DETAIL_LIMIT || 0);
+
 const TOPOLOGY_TITLE = process.env.TOPOLOGY_TITLE || "LibreNMS Network Fabric";
 const TOPOLOGY_SUBTITLE = process.env.TOPOLOGY_SUBTITLE || "Enterprise topology, interface utilization, alerts, and device inventory";
 
@@ -174,12 +184,16 @@ async function buildLiveTopology() {
   const devices = rawDevices.map(normalizeDevice).filter(d => d.role !== "exclude");
   const deviceById = new Map(devices.map(d => [d.device_id, d]));
 
-  const linkPortIds = rawLinks.flatMap(l => [
+  const limitedRawLinks = limitTopologyLinks(rawLinks);
+
+  const linkPortIds = limitedRawLinks.flatMap(l => [
     l.local_port_id,
     l.remote_port_id
-  ]).filter(Boolean);
+  ]).filter(Boolean).slice(0, PORT_DETAIL_LIMIT);
 
-  const directPortDetails = await getPortDetailsMap(linkPortIds);
+  const directPortDetails = PORT_DETAIL_LIMIT > 0
+    ? await getPortDetailsMap(linkPortIds)
+    : new Map();
 
   for (const detailedPort of directPortDetails.values()) {
     const id = String(detailedPort.port_id || detailedPort.id || "");
