@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime / logs
+logs/
+*.log
+*.pid
+
+# Build / coverage
+dist/
+build/
+coverage/
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local compose overrides
+docker-compose.override.yml

@@ -1,0 +1,9 @@
+services:
+  librenms-netmap:
+    build: .
+    container_name: librenms-netmap
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8088:8088"

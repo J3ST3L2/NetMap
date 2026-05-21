@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+.env
+.env.*
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+logs
+coverage
+.vscode
+.idea
+.DS_Store
+Thumbs.db
