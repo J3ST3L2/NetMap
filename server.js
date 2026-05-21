@@ -319,6 +319,213 @@ app.use(express.json());
 app.use("/vendor/cytoscape.min.js", express.static(path.join(__dirname, "node_modules/cytoscape/dist/cytoscape.min.js")));
 app.use(express.static(path.join(__dirname, "public")));
 
+
+function normalizeMac(input) {
+  const compact = String(input || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+  if (compact.length !== 12) return null;
+  return {
+    compact,
+    colon: compact.match(/.{1,2}/g).join(":")
+  };
+}
+
+function looksLikeIpOrCidr(input) {
+  return /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(String(input || "").trim());
+}
+
+function looksLikeMac(input) {
+  return normalizeMac(input) !== null;
+}
+
+function safeArray(payload, keys) {
+  return asArray(payload, keys);
+}
+
+async function tryGetJson(route) {
+  try {
+    return await getJson(route);
+  } catch (err) {
+    return {
+      status: "error",
+      route,
+      error: err.response?.data || err.message || String(err)
+    };
+  }
+}
+
+async function searchPortDetail(portId) {
+  if (!portId) return null;
+
+  try {
+    const data = await getJson(`/api/v0/ports/${portId}`);
+    const ports = asArray(data, ["port", "ports", "data", "interfaces", "ifaces"]);
+    return ports[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function portDisplayFromRaw(port) {
+  if (!port) return null;
+  const name = s(port.ifName) || s(port.ifDescr) || s(port.ifAlias) || s(port.port_id || port.id);
+  const alias = s(port.ifAlias);
+  return {
+    port_id: s(port.port_id || port.id),
+    device_id: s(port.device_id),
+    name,
+    alias,
+    label: alias && alias !== name ? `${name} — ${alias}` : name,
+    ifName: s(port.ifName),
+    ifAlias: s(port.ifAlias),
+    ifDescr: s(port.ifDescr),
+    ifSpeed: portSpeedBps(port),
+    speedLabel: speedLabel(portSpeedBps(port)),
+    ifOperStatus: normalizeOperStatus ? normalizeOperStatus(port.ifOperStatus || port.oper_status) : s(port.ifOperStatus || port.oper_status)
+  };
+}
+
+function normalizeSearchResult(result) {
+  return {
+    source: result.source || "unknown",
+    ip: result.ip || "",
+    mac: result.mac || "",
+    vlan: result.vlan || "",
+    device: result.device || "",
+    hostname: result.hostname || "",
+    sysName: result.sysName || "",
+    port_id: result.port_id || "",
+    port: result.port || "",
+    portAlias: result.portAlias || "",
+    speed: result.speed || "",
+    lastSeen: result.lastSeen || "",
+    updatedAt: result.updatedAt || "",
+    raw: result.raw || {}
+  };
+}
+
+async function lookupArp(query) {
+  const routes = [`/api/v0/resources/ip/arp/${encodeURIComponent(query)}`];
+
+  const mac = normalizeMac(query);
+  if (mac) {
+    routes.push(`/api/v0/resources/ip/arp/${encodeURIComponent(mac.colon)}`);
+    routes.push(`/api/v0/resources/ip/arp/${encodeURIComponent(mac.compact)}`);
+  }
+
+  for (const route of routes) {
+    const data = await tryGetJson(route);
+    const rows = safeArray(data, ["arp", "data", "results"]);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+
+  return [];
+}
+
+async function lookupFdb(macInput) {
+  const mac = normalizeMac(macInput);
+  if (!mac) return [];
+
+  const routes = [
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.compact)}/detail`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.colon)}/detail`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.compact)}`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.colon)}`
+  ];
+
+  for (const route of routes) {
+    const data = await tryGetJson(route);
+    const rows = safeArray(data, ["ports_fdb", "fdb", "data", "results"]);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+
+  return [];
+}
+
+async function hydrateArpResults(arpRows) {
+  const out = [];
+
+  for (const row of arpRows) {
+    const portId = s(row.port_id);
+    const port = await searchPortDetail(portId);
+    const portInfo = portDisplayFromRaw(port);
+
+    out.push(normalizeSearchResult({
+      source: "ARP",
+      ip: s(row.ipv4_address || row.ip || row.ip_address),
+      mac: normalizeMac(row.mac_address || row.mac)?.colon || s(row.mac_address || row.mac),
+      vlan: s(row.vlan || row.vlan_id),
+      device: portInfo?.device_id || s(row.device_id),
+      port_id: portId,
+      port: portInfo?.label || portInfo?.name || "",
+      portAlias: portInfo?.alias || "",
+      speed: portInfo?.speedLabel || "",
+      updatedAt: s(row.updated_at || row.last_updated),
+      raw: row
+    }));
+  }
+
+  return out;
+}
+
+async function hydrateFdbResults(fdbRows) {
+  const out = [];
+
+  for (const row of fdbRows) {
+    const portId = s(row.port_id);
+    const port = portId ? await searchPortDetail(portId) : null;
+    const portInfo = portDisplayFromRaw(port);
+
+    const mac = normalizeMac(row.mac || row.mac_address) || normalizeMac(row.mac_address_raw);
+
+    out.push(normalizeSearchResult({
+      source: "FDB",
+      ip: s(row.ip || row.ipv4_address),
+      mac: mac?.colon || s(row.mac || row.mac_address),
+      vlan: s(row.vlan || row.vlan_id || row.vlan_vlan),
+      device: s(row.hostname || row.device || row.device_id || portInfo?.device_id),
+      hostname: s(row.hostname),
+      sysName: s(row.sysName),
+      port_id: portId,
+      port: s(row.ifName || row.ifDescr || row.ifAlias || portInfo?.label || portInfo?.name),
+      portAlias: s(row.ifAlias || portInfo?.alias),
+      speed: portInfo?.speedLabel || "",
+      lastSeen: s(row.last_seen),
+      updatedAt: s(row.updated_at || row.created_at),
+      raw: row
+    }));
+  }
+
+  return out;
+}
+
+function dedupeSearchResults(rows) {
+  const seen = new Set();
+  const out = [];
+
+  for (const row of rows) {
+    const key = [
+      row.source,
+      row.ip,
+      row.mac,
+      row.device,
+      row.port_id,
+      row.port,
+      row.vlan,
+      row.updatedAt
+    ].join("|");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+
+  return out;
+}
+
 app.get("/api/health", async (req, res) => {
   if (MOCK_MODE === "true" || (MOCK_MODE === "auto" && !hasLiveConfig())) return res.json({ status:"ok", mode:"mock", message:"Running in mock mode.", configured:hasLiveConfig() });
   if (!hasLiveConfig()) return res.status(500).json({ status:"error", message:"Server is missing LIBRENMS_URL or LIBRENMS_TOKEN." });
@@ -328,6 +535,528 @@ app.get("/api/topology", async (req, res) => { try { res.json(await currentTopol
 app.get("/api/devices", async (req, res) => { try { const d = await currentTopology(); res.json({ status:"ok", generatedAt:d.generatedAt, devices:d.devices, summary:d.summary }); } catch (err) { res.status(502).json({ status:"error", message:err.message }); } });
 app.get("/api/interfaces", async (req, res) => { try { const d = await currentTopology(); let ports = d.ports; const device = s(req.query.device), role = s(req.query.role); if (device) ports = ports.filter(p => p.device_id === device || p.device_label === device); if (role) ports = ports.filter(p => p.device_role === role); res.json({ status:"ok", generatedAt:d.generatedAt, interfaces:ports, summary:{ total:ports.length, up:ports.filter(p=>p.ifOperStatus==="up").length, down:ports.filter(p=>p.ifOperStatus && p.ifOperStatus!=="up").length, totalInMbps:ports.reduce((sum,p)=>sum+n(p.inMbps),0), totalOutMbps:ports.reduce((sum,p)=>sum+n(p.outMbps),0) } }); } catch (err) { res.status(502).json({ status:"error", message:err.message }); } });
 app.get("/api/links", async (req, res) => { try { const d = await currentTopology(); res.json({ status:"ok", generatedAt:d.generatedAt, links:d.links, summary:{ total:d.links.length, totalInMbps:d.links.reduce((sum,l)=>sum+n(l.inMbps),0), totalOutMbps:d.links.reduce((sum,l)=>sum+n(l.outMbps),0) } }); } catch (err) { res.status(502).json({ status:"error", message:err.message }); } });
+
+app.get("/api/search", async (req, res) => {
+  const query = String(req.query.q || "").trim();
+
+  if (!query) {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing search query. Provide ?q=IP, MAC, or CIDR."
+    });
+  }
+
+  try {
+    let arpRows = [];
+    let fdbRows = [];
+
+    if (looksLikeIpOrCidr(query)) {
+      arpRows = await lookupArp(query);
+
+      // If IP/CIDR lookup gives MACs, follow those into FDB to locate switch ports.
+      const macs = [...new Set(arpRows.map(r => normalizeMac(r.mac_address || r.mac)?.compact).filter(Boolean))];
+      for (const mac of macs.slice(0, 50)) {
+        fdbRows.push(...await lookupFdb(mac));
+      }
+    } else if (looksLikeMac(query)) {
+      arpRows = await lookupArp(query);
+      fdbRows = await lookupFdb(query);
+    } else {
+      return res.status(400).json({
+        status: "error",
+        message: "Search must be an IP address, CIDR, or MAC address."
+      });
+    }
+
+    const results = dedupeSearchResults([
+      ...await hydrateArpResults(arpRows),
+      ...await hydrateFdbResults(fdbRows)
+    ]);
+
+    res.json({
+      status: "ok",
+      query,
+      count: results.length,
+      results
+    });
+  } catch (err) {
+    res.status(502).json({
+      status: "error",
+      message: "Search failed.",
+      detail: err.response?.data || err.message || String(err)
+    });
+  }
+});
+
+
+function netmapNormalizeMac(input) {
+  const compact = String(input || "").toLowerCase().replace(/[^0-9a-f]/g, "");
+  if (compact.length !== 12) return null;
+  return {
+    compact,
+    colon: compact.match(/.{1,2}/g).join(":")
+  };
+}
+
+function netmapLooksLikeIpOrCidr(input) {
+  return /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(String(input || "").trim());
+}
+
+function netmapLooksLikeMac(input) {
+  return netmapNormalizeMac(input) !== null;
+}
+
+async function netmapTryGet(route) {
+  try {
+    return await getJson(route);
+  } catch (err) {
+    return {
+      __netmap_error: true,
+      route,
+      error: err.response?.data || err.message || String(err)
+    };
+  }
+}
+
+async function netmapTopology() {
+  if (typeof buildLiveTopology === "function") {
+    return await buildLiveTopology();
+  }
+
+  throw new Error("buildLiveTopology is unavailable");
+}
+
+async function netmapPortDetail(portId) {
+  if (!portId) return null;
+
+  try {
+    const data = await getJson(`/api/v0/ports/${encodeURIComponent(portId)}`);
+    const rows = asArray(data, ["port", "ports", "data", "interfaces", "ifaces"]);
+    return rows[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function netmapPortInfo(rawPort, topo) {
+  if (!rawPort) return null;
+
+  const portId = s(rawPort.port_id || rawPort.id);
+  const deviceId = s(rawPort.device_id);
+  const device = topo?.devices?.find(d => String(d.device_id) === String(deviceId));
+  const name = s(rawPort.ifName) || s(rawPort.ifDescr) || s(rawPort.ifAlias) || portId;
+  const alias = s(rawPort.ifAlias);
+  const speedBps = typeof portSpeedBps === "function" ? portSpeedBps(rawPort) : n(rawPort.ifSpeed);
+
+  return {
+    portId,
+    deviceId,
+    deviceLabel: device?.label || s(rawPort.hostname) || deviceId,
+    name,
+    alias,
+    label: alias && alias !== name ? `${name} - ${alias}` : name,
+    speed: typeof speedLabel === "function" ? speedLabel(speedBps) : "",
+    status: typeof normalizeOperStatus === "function"
+      ? normalizeOperStatus(rawPort.ifOperStatus || rawPort.oper_status)
+      : s(rawPort.ifOperStatus || rawPort.oper_status || "")
+  };
+}
+
+async function netmapLookupArp(query) {
+  const mac = netmapNormalizeMac(query);
+  const routes = [`/api/v0/resources/ip/arp/${encodeURIComponent(query)}`];
+
+  if (mac) {
+    routes.push(`/api/v0/resources/ip/arp/${encodeURIComponent(mac.colon)}`);
+    routes.push(`/api/v0/resources/ip/arp/${encodeURIComponent(mac.compact)}`);
+  }
+
+  for (const route of routes) {
+    const data = await netmapTryGet(route);
+    const rows = asArray(data, ["arp", "data", "results"]);
+    if (rows.length) return rows;
+  }
+
+  return [];
+}
+
+async function netmapLookupFdb(macInput) {
+  const mac = netmapNormalizeMac(macInput);
+  if (!mac) return [];
+
+  const routes = [
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.compact)}/detail`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.colon)}/detail`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.compact)}`,
+    `/api/v0/resources/fdb/${encodeURIComponent(mac.colon)}`
+  ];
+
+  for (const route of routes) {
+    const data = await netmapTryGet(route);
+    const rows = asArray(data, ["ports_fdb", "fdb", "data", "results"]);
+    if (rows.length) return rows;
+  }
+
+  return [];
+}
+
+function netmapRowMac(row) {
+  const mac = netmapNormalizeMac(row.mac_address || row.mac || row.mac_address_raw || row.macAddress);
+  return mac?.colon || s(row.mac_address || row.mac || row.macAddress);
+}
+
+function netmapRowIp(row) {
+  return s(row.ipv4_address || row.ip || row.ip_address || row.address);
+}
+
+function netmapRowVlan(row) {
+  return s(row.vlan || row.vlan_id || row.vlan_vlan || row.vlan_name);
+}
+
+function netmapRowLastSeen(row) {
+  return s(row.last_seen || row.updated_at || row.last_updated || row.created_at || row.timestamp);
+}
+
+async function netmapHydrateArp(rows, topo) {
+  const out = [];
+
+  for (const row of rows) {
+    const portId = s(row.port_id);
+    const portInfo = netmapPortInfo(await netmapPortDetail(portId), topo);
+
+    out.push({
+      source: "ARP",
+      ip: netmapRowIp(row),
+      mac: netmapRowMac(row),
+      vlan: netmapRowVlan(row),
+      device: s(row.device_id || portInfo?.deviceId),
+      deviceLabel: portInfo?.deviceLabel || s(row.hostname || row.device_id),
+      hostname: s(row.hostname),
+      port_id: portId,
+      port: portInfo?.label || "",
+      portAlias: portInfo?.alias || "",
+      speed: portInfo?.speed || "",
+      lastSeen: s(row.last_seen),
+      updatedAt: netmapRowLastSeen(row),
+      raw: row
+    });
+  }
+
+  return out;
+}
+
+async function netmapHydrateFdb(rows, topo) {
+  const out = [];
+
+  for (const row of rows) {
+    const portId = s(row.port_id);
+    const portInfo = netmapPortInfo(await netmapPortDetail(portId), topo);
+
+    out.push({
+      source: "FDB",
+      ip: netmapRowIp(row),
+      mac: netmapRowMac(row),
+      vlan: netmapRowVlan(row),
+      device: s(row.device_id || row.hostname || row.device || portInfo?.deviceId),
+      deviceLabel: portInfo?.deviceLabel || s(row.hostname || row.device || row.device_id),
+      hostname: s(row.hostname),
+      port_id: portId,
+      port: s(row.ifName || row.ifDescr || row.ifAlias) || portInfo?.label || "",
+      portAlias: s(row.ifAlias) || portInfo?.alias || "",
+      speed: portInfo?.speed || "",
+      lastSeen: s(row.last_seen),
+      updatedAt: netmapRowLastSeen(row),
+      raw: row
+    });
+  }
+
+  return out;
+}
+
+function netmapDedupe(rows) {
+  const seen = new Set();
+  const out = [];
+
+  for (const row of rows) {
+    const key = [
+      row.source,
+      row.ip,
+      row.mac,
+      row.deviceLabel,
+      row.port_id,
+      row.port,
+      row.vlan,
+      row.lastSeen,
+      row.updatedAt
+    ].join("|");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+
+  return out;
+}
+
+function netmapBestLocation(rows) {
+  const fdb = rows.find(r => r.source === "FDB" && (r.port || r.port_id || r.deviceLabel));
+  const arp = rows.find(r => r.source === "ARP" && (r.port || r.port_id || r.deviceLabel));
+  const pick = fdb || arp;
+
+  if (!pick) return null;
+
+  return {
+    device: pick.device,
+    deviceLabel: pick.deviceLabel,
+    port: pick.port,
+    port_id: pick.port_id,
+    vlan: pick.vlan,
+    mac: pick.mac,
+    ip: pick.ip,
+    lastSeen: pick.lastSeen || pick.updatedAt,
+    confidence: fdb ? "best FDB match" : "ARP match"
+  };
+}
+
+app.get("/api/endpoint-search", async (req, res) => {
+  const query = String(req.query.q || "").trim();
+
+  if (!query) {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing query. Use ?q=IP, CIDR, or MAC."
+    });
+  }
+
+  if (!netmapLooksLikeIpOrCidr(query) && !netmapLooksLikeMac(query)) {
+    return res.status(400).json({
+      status: "error",
+      message: "Search must be an IP address, CIDR, or MAC address."
+    });
+  }
+
+  try {
+    const topo = await netmapTopology();
+    let arpRows = [];
+    let fdbRows = [];
+
+    if (netmapLooksLikeIpOrCidr(query)) {
+      arpRows = await netmapLookupArp(query);
+      const macs = [...new Set(arpRows.map(r => netmapNormalizeMac(r.mac_address || r.mac)?.compact).filter(Boolean))];
+
+      for (const mac of macs.slice(0, 50)) {
+        fdbRows.push(...await netmapLookupFdb(mac));
+      }
+    } else {
+      arpRows = await netmapLookupArp(query);
+      fdbRows = await netmapLookupFdb(query);
+    }
+
+    const results = netmapDedupe([
+      ...await netmapHydrateArp(arpRows, topo),
+      ...await netmapHydrateFdb(fdbRows, topo)
+    ]);
+
+    res.json({
+      status: "ok",
+      query,
+      count: results.length,
+      location: netmapBestLocation(results),
+      results
+    });
+  } catch (err) {
+    res.status(502).json({
+      status: "error",
+      message: "Endpoint search failed.",
+      detail: err.response?.data || err.message || String(err)
+    });
+  }
+});
+
+app.get("/api/client-location", async (req, res) => {
+  const query = String(req.query.q || "").trim();
+
+  if (!query) {
+    return res.status(400).json({
+      status: "error",
+      message: "Missing query. Use ?q=IP or MAC."
+    });
+  }
+
+  try {
+    const fakeReq = { query: { q: query } };
+    const topo = await netmapTopology();
+    let arpRows = [];
+    let fdbRows = [];
+
+    if (netmapLooksLikeIpOrCidr(query)) {
+      arpRows = await netmapLookupArp(query);
+      const macs = [...new Set(arpRows.map(r => netmapNormalizeMac(r.mac_address || r.mac)?.compact).filter(Boolean))];
+      for (const mac of macs.slice(0, 20)) fdbRows.push(...await netmapLookupFdb(mac));
+    } else if (netmapLooksLikeMac(query)) {
+      arpRows = await netmapLookupArp(query);
+      fdbRows = await netmapLookupFdb(query);
+    }
+
+    const results = netmapDedupe([
+      ...await netmapHydrateArp(arpRows, topo),
+      ...await netmapHydrateFdb(fdbRows, topo)
+    ]);
+
+    res.json({
+      status: "ok",
+      query,
+      location: netmapBestLocation(results),
+      results
+    });
+  } catch (err) {
+    res.status(502).json({
+      status: "error",
+      message: "Client location lookup failed.",
+      detail: err.message || String(err)
+    });
+  }
+});
+
+app.get("/api/top-talkers", async (req, res) => {
+  try {
+    const topo = await netmapTopology();
+
+    const devices = [...(topo.devices || [])]
+      .map(d => ({
+        id: d.id,
+        label: d.label,
+        role: d.role,
+        vendor: d.vendor,
+        inMbps: Number(d.trafficInMbps || 0),
+        outMbps: Number(d.trafficOutMbps || 0),
+        totalMbps: Number(d.trafficInMbps || 0) + Number(d.trafficOutMbps || 0),
+        utilPct: 0
+      }))
+      .sort((a, b) => b.totalMbps - a.totalMbps)
+      .slice(0, 10);
+
+    const interfaces = [...(topo.ports || [])]
+      .map(p => ({
+        deviceLabel: p.device_label || p.device_id,
+        name: p.name,
+        alias: p.ifAlias,
+        speed: p.speedLabel,
+        inMbps: Number(p.inMbps || 0),
+        outMbps: Number(p.outMbps || 0),
+        totalMbps: Number(p.inMbps || 0) + Number(p.outMbps || 0),
+        utilPct: Number(p.utilPct || 0)
+      }))
+      .sort((a, b) => b.totalMbps - a.totalMbps)
+      .slice(0, 10);
+
+    const links = [...(topo.links || [])]
+      .map(l => ({
+        localDevice: l.localDeviceLabel || l.source,
+        remoteDevice: l.remoteDeviceLabel || l.target,
+        localPort: l.localPortName,
+        remotePort: l.remotePortName,
+        speed: l.speedLabel,
+        inMbps: Number(l.inMbps || 0),
+        outMbps: Number(l.outMbps || 0),
+        totalMbps: Number(l.inMbps || 0) + Number(l.outMbps || 0),
+        utilPct: Number(l.utilPct || 0)
+      }))
+      .sort((a, b) => b.totalMbps - a.totalMbps)
+      .slice(0, 10);
+
+    res.json({
+      status: "ok",
+      generatedAt: topo.generatedAt,
+      devices,
+      interfaces,
+      links
+    });
+  } catch (err) {
+    res.status(502).json({
+      status: "error",
+      message: "Top talkers failed.",
+      detail: err.message || String(err)
+    });
+  }
+});
+
+async function netmapSlackTickerItems() {
+  if (String(process.env.SLACK_ENABLED || "false").toLowerCase() !== "true") return [];
+
+  const token = process.env.SLACK_BOT_TOKEN;
+  const channel = process.env.SLACK_CHANNEL_ID;
+  if (!token || !channel) return [];
+
+  try {
+    const { data } = await axios.get("https://slack.com/api/conversations.history", {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { channel, limit: 8 },
+      timeout: 8000
+    });
+
+    if (!data.ok) return [];
+
+    return (data.messages || []).slice(0, 8).map(m => ({
+      source: "Slack",
+      severity: "info",
+      message: String(m.text || "").replace(/\s+/g, " ").slice(0, 220),
+      timestamp: m.ts
+    })).filter(i => i.message);
+  } catch {
+    return [];
+  }
+}
+
+app.get("/api/ticker", async (req, res) => {
+  try {
+    const topo = await netmapTopology();
+    const items = [];
+
+    for (const alert of (topo.alerts || []).slice(0, 10)) {
+      items.push({
+        source: "LibreNMS",
+        severity: String(alert.severity || "warning").toLowerCase(),
+        message: `${alert.hostname || alert.device || alert.device_id || "device"}: ${alert.title || alert.rule || alert.name || "active alert"}`,
+        timestamp: alert.timestamp || alert.time_logged || topo.generatedAt
+      });
+    }
+
+    for (const device of (topo.devices || []).filter(d => d.status !== "up").slice(0, 8)) {
+      items.push({
+        source: "Device",
+        severity: "critical",
+        message: `${device.label} is ${device.status}`,
+        timestamp: topo.generatedAt
+      });
+    }
+
+    for (const link of (topo.links || []).filter(l => Number(l.utilPct || 0) >= 75).slice(0, 8)) {
+      items.push({
+        source: "Traffic",
+        severity: Number(link.utilPct || 0) >= 90 ? "critical" : "warning",
+        message: `${link.localDeviceLabel || link.source} to ${link.remoteDeviceLabel || link.target} at ${Number(link.utilPct || 0).toFixed(1)}%`,
+        timestamp: topo.generatedAt
+      });
+    }
+
+    items.push(...await netmapSlackTickerItems());
+
+    res.json({
+      status: "ok",
+      generatedAt: new Date().toISOString(),
+      count: items.length,
+      items: items.slice(0, 25)
+    });
+  } catch (err) {
+    res.status(502).json({
+      status: "error",
+      message: "Ticker failed.",
+      detail: err.message || String(err)
+    });
+  }
+});
+
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public/index.html")));
 
 app.listen(PORT, "0.0.0.0", () => { console.log(`NetMap listening on http://0.0.0.0:${PORT}`); console.log(`Mode: ${MOCK_MODE}`); });

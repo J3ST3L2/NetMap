@@ -52,10 +52,10 @@ function initCy() {
   cy = cytoscape({
     container: document.getElementById("cy"), elements: [], layout: { name:"preset" }, wheelSensitivity:0.16, minZoom:0.25, maxZoom:2.2,
     style: [
-      { selector:"node", style:{ "shape":"round-rectangle", "width":136, "height":72, "background-color":"data(color)", "background-opacity":0.13, "border-color":"data(color)", "border-width":2, "border-opacity":0.95, "label":ele => `${ele.data("badge")}  ${ele.data("label")}\n${ele.data("subtitle")}`, "text-wrap":"wrap", "text-max-width":160, "text-valign":"center", "text-halign":"center", "font-size":11, "font-weight":750, "color":"#eef7ff", "text-outline-width":2, "text-outline-color":"#06101c", "shadow-blur":20, "shadow-color":"data(color)", "shadow-opacity":0.30, "shadow-offset-x":0, "shadow-offset-y":0 } },
+      { selector:"node", style:{ "shape":"round-rectangle", "width":154, "height":82, "background-color":"data(color)", "background-opacity":0.13, "border-color":"data(color)", "border-width":2, "border-opacity":0.95, "label":ele => `${ele.data("badge")}  ${ele.data("label")}\n${ele.data("subtitle")}`, "text-wrap":"wrap", "text-max-width":184, "text-valign":"center", "text-halign":"center", "font-size":12, "font-weight":750, "color":"#eef7ff", "text-outline-width":2, "text-outline-color":"#06101c", "shadow-blur":20, "shadow-color":"data(color)", "shadow-opacity":0.30, "shadow-offset-x":0, "shadow-offset-y":0 } },
       { selector:'node[status = "down"]', style:{ "border-style":"dashed", "background-opacity":0.07 } },
       { selector:'node[alerts > 0]', style:{ "border-width":3 } },
-      { selector:"edge", style:{ "curve-style":"bezier", "width":"data(width)", "line-color":"data(color)", "target-arrow-color":"data(color)", "source-arrow-color":"data(color)", "target-arrow-shape":"triangle", "source-arrow-shape":"triangle", "arrow-scale":.7, "opacity":.88, "label":"data(label)", "font-size":10, "color":"#dceeff", "text-outline-color":"#06101c", "text-outline-width":3, "text-background-color":"#06101c", "text-background-opacity":.62, "text-background-padding":4, "line-style":"dashed", "line-dash-pattern":[12,9], "line-dash-offset":0 } },
+      { selector:"edge", style:{ "curve-style":"bezier", "width":"data(width)", "line-color":"data(color)", "target-arrow-color":"data(color)", "source-arrow-color":"data(color)", "target-arrow-shape":"triangle", "source-arrow-shape":"triangle", "arrow-scale":.7, "opacity":.88, "label":"data(label)", "font-size":11, "color":"#dceeff", "text-outline-color":"#06101c", "text-outline-width":3, "text-background-color":"#06101c", "text-background-opacity":.62, "text-background-padding":4, "line-style":"dashed", "line-dash-pattern":[12,9], "line-dash-offset":0 } },
       { selector:":selected", style:{ "border-color":"#ffffff", "line-color":"#ffffff", "target-arrow-color":"#ffffff", "source-arrow-color":"#ffffff" } },
       { selector:".faded", style:{ "opacity":.12 } },
       { selector:".hiddenByFilter", style:{ "display":"none" } }
@@ -156,7 +156,60 @@ function copyDiagnostics() {
 
 function setPill(text, kind = "neutral") { els.panelStatus.textContent = text; els.panelStatus.className = `pill ${kind}`; }
 function tagRows(obj) { return Object.entries(obj || {}).map(([k,v]) => `<span class="tag">${esc(k)}: ${v}</span>`).join(""); }
-function showMapPanel() { els.panelTitle.textContent = "Map"; els.panelSub.textContent = "Click a node or link to inspect it."; setPill("ready"); els.panelBody.innerHTML = `<p class="empty">This map is built from LibreNMS devices, discovered links, interface counters, and alerts. Drag nodes to adjust the layout; your browser saves the positions.</p><h3>Roles</h3><div class="tag-row">${tagRows(topology.summary?.roleCounts)}</div><h3>Vendors</h3><div class="tag-row">${tagRows(topology.summary?.vendorCounts)}</div><div class="kv"><span>Layout</span><strong>Generic enterprise fabric</strong></div><div class="kv"><span>Traffic</span><strong>Animated from interface counters</strong></div><div class="kv"><span>Refresh</span><strong>${Number(els.refreshInterval.value) / 1000}s</strong></div>`; }
+function showMapPanel() {
+  const s = topology.summary || {};
+  const busiestLinks = [...(topology.links || [])]
+    .sort((a, b) => Math.max(Number(b.inMbps || 0), Number(b.outMbps || 0)) - Math.max(Number(a.inMbps || 0), Number(a.outMbps || 0)))
+    .slice(0, 5);
+
+  const busiestPorts = [...(topology.ports || [])]
+    .sort((a, b) => Number(b.utilPct || 0) - Number(a.utilPct || 0))
+    .slice(0, 5);
+
+  const unlinked = [...(topology.devices || [])]
+    .filter(d => !(topology.links || []).some(l => l.source === d.id || l.target === d.id))
+    .slice(0, 10);
+
+  const modeLabel = topology.mode === "mock" ? "mock" : "live";
+  const pillKind = topology.mode === "mock" ? "warn" : "good";
+
+  els.panelTitle.textContent = "Topology Summary";
+  els.panelSub.textContent = "Live topology overview, busiest paths, and devices needing attention.";
+  setPill(modeLabel, pillKind);
+
+  els.panelBody.innerHTML = `
+    <div class="kv"><span>Devices</span><strong>${s.totalDevices || 0}</strong></div>
+    <div class="kv"><span>Interfaces</span><strong>${s.totalPorts || 0}</strong></div>
+    <div class="kv"><span>Discovered links</span><strong>${s.totalLinks || 0}</strong></div>
+    <div class="kv"><span>Total traffic</span><strong>${fmtMbps((s.totalInMbps || 0) + (s.totalOutMbps || 0))}</strong></div>
+    <div class="kv"><span>Alerts</span><strong>${s.activeAlerts || 0}</strong></div>
+
+    <h3>Roles</h3>
+    <div class="tag-row">${tagRows(s.roleCounts)}</div>
+
+    <h3>Vendors</h3>
+    <div class="tag-row">${tagRows(s.vendorCounts)}</div>
+
+    <h3>Busiest Links</h3>
+    <div class="list">
+      ${busiestLinks.map(linkCard).join("") || `<p class="empty">No discovered links available.</p>`}
+    </div>
+
+    <h3>Busiest Interfaces</h3>
+    <div class="list">
+      ${busiestPorts.map(portCard).join("") || `<p class="empty">No interface counter data available.</p>`}
+    </div>
+
+    <h3>Undiscovered / Unlinked Devices</h3>
+    <div class="tag-row">
+      ${unlinked.length
+        ? unlinked.map(d => `<span class="tag">${esc(d.label)}</span>`).join("")
+        : `<span class="tag">none</span>`}
+    </div>
+  `;
+}
+
+
 function showOverview() { const s = topology.summary, busiestLinks = [...topology.links].sort((a,b) => Math.max(b.inMbps,b.outMbps) - Math.max(a.inMbps,a.outMbps)).slice(0,5), busiestPorts = [...topology.ports].sort((a,b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)).slice(0,5); els.panelTitle.textContent = "Overview"; els.panelSub.textContent = "Network health, vendors, roles, and busiest interfaces."; setPill(topology.mode, topology.mode === "mock" ? "warn" : "good"); els.panelBody.innerHTML = `<div class="kv"><span>Devices</span><strong>${s.totalDevices}</strong></div><div class="kv"><span>Interfaces</span><strong>${s.totalPorts}</strong></div><div class="kv"><span>Links</span><strong>${s.totalLinks}</strong></div><div class="kv"><span>Traffic</span><strong>${fmtMbps(s.totalInMbps + s.totalOutMbps)}</strong></div><div class="kv"><span>Alerts</span><strong>${s.activeAlerts}</strong></div><h3>Vendors</h3><div class="tag-row">${tagRows(s.vendorCounts)}</div><h3>Busiest Interfaces</h3><div class="list">${busiestPorts.map(portCard).join("") || `<p class="empty">No interface counters found.</p>`}</div><h3>Busiest Links</h3><div class="list">${busiestLinks.map(linkCard).join("") || `<p class="empty">No links found.</p>`}</div>`; }
 function showDevices() {
   const devices = [...topology.devices].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
@@ -273,48 +326,126 @@ function showLinks() {
 
 
 function showAlerts() { const alerts = topology.alerts || []; els.panelTitle.textContent = "Alerts"; els.panelSub.textContent = `${alerts.length} active alert records.`; setPill(alerts.length ? "active" : "clear", alerts.length ? "warn" : "good"); els.panelBody.innerHTML = `<div class="list">${alerts.map(a => `<div class="item"><div class="item-title"><span>${esc(a.title || a.rule || a.name || "Alert")}</span><span>${esc(a.severity || a.state || "active")}</span></div><div class="item-sub">${esc(a.hostname || a.device || a.device_id || "")} | ${esc(a.timestamp || a.time_logged || "")}</div></div>`).join("") || `<p class="empty">No active alerts returned.</p>`}</div>`; }
+
+function showSearch() {
+  els.panelTitle.textContent = "Search";
+  els.panelSub.textContent = "Find an endpoint by IP, MAC, or CIDR using LibreNMS ARP and FDB tables.";
+  setPill("ARP / MAC");
+
+  els.panelBody.innerHTML = `
+    <div class="search-panel">
+      <input id="endpointSearchInput" placeholder="IP, CIDR, or MAC... e.g. 10.20.20.50 or aa:bb:cc:dd:ee:ff" />
+      <button id="endpointSearchBtn">Search</button>
+    </div>
+    <p class="empty">Search checks ARP first, then follows MAC addresses into the FDB/MAC table to find the switch port and last seen time.</p>
+    <div id="endpointSearchResults" class="list"></div>
+  `;
+
+  const input = document.getElementById("endpointSearchInput");
+  const button = document.getElementById("endpointSearchBtn");
+
+  const run = () => runEndpointSearch(input.value);
+  button.addEventListener("click", run);
+  input.addEventListener("keydown", event => {
+    if (event.key === "Enter") run();
+  });
+
+  input.focus();
+}
+
+async function runEndpointSearch(query) {
+  const q = String(query || "").trim();
+  const resultsEl = document.getElementById("endpointSearchResults");
+
+  if (!q) {
+    resultsEl.innerHTML = `<p class="empty">Enter an IP, MAC, or CIDR.</p>`;
+    return;
+  }
+
+  resultsEl.innerHTML = `<p class="empty">Searching LibreNMS ARP/FDB tables...</p>`;
+
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+    const data = await res.json();
+
+    if (!res.ok || data.status !== "ok") {
+      resultsEl.innerHTML = `<p class="empty">${escapeHtml(data.message || "Search failed.")}</p>`;
+      return;
+    }
+
+    if (!data.results.length) {
+      resultsEl.innerHTML = `<p class="empty">No ARP/FDB entries found for ${escapeHtml(q)}.</p>`;
+      return;
+    }
+
+    resultsEl.innerHTML = `
+      <div class="search-summary">${data.count} result${data.count === 1 ? "" : "s"} for <strong>${escapeHtml(data.query)}</strong></div>
+      <div class="table search-table">
+        <div class="table-row header">
+          <span>Source</span><span>IP</span><span>MAC</span><span>Device</span><span>Port</span><span>VLAN</span><span>Last seen</span>
+        </div>
+        ${data.results.map(r => `
+          <div class="table-row item">
+            <span>${escapeHtml(r.source || "—")}</span>
+            <strong>${escapeHtml(r.ip || "—")}</strong>
+            <span>${escapeHtml(r.mac || "—")}</span>
+            <span>${escapeHtml(r.hostname || r.sysName || r.device || "—")}</span>
+            <span title="${escapeHtml(r.portAlias || "")}">${escapeHtml(r.port || "—")}${r.speed ? ` · ${escapeHtml(r.speed)}` : ""}</span>
+            <span>${escapeHtml(r.vlan || "—")}</span>
+            <span>${escapeHtml(r.lastSeen || r.updatedAt || "—")}</span>
+          </div>
+        `).join("")}
+      </div>
+    `;
+  } catch (err) {
+    resultsEl.innerHTML = `<p class="empty">Search failed: ${escapeHtml(err.message || String(err))}</p>`;
+  }
+}
+
 function showSettings() {
   const settings = topology.settings || {};
   const s = topology.summary || {};
 
   els.panelTitle.textContent = "Settings";
-  els.panelSub.textContent = "Runtime diagnostics and dashboard behavior.";
-  setPill("diagnostics");
+  els.panelSub.textContent = "Runtime diagnostics and current dashboard behavior.";
+  setPill("diagnostics", "good");
 
   els.panelBody.innerHTML = `
-    <h3>Runtime</h3>
-    <div class="kv"><span>Mode</span><strong>${escapeHtml(topology.mode)}</strong></div>
-    <div class="kv"><span>Source</span><strong>${escapeHtml(topology.source)}</strong></div>
-    <div class="kv"><span>Updated</span><strong>${escapeHtml(new Date(topology.generatedAt).toLocaleString())}</strong></div>
-    <div class="kv"><span>Default refresh</span><strong>${Number(settings.defaultRefreshMs || Number(els.refreshInterval.value)) / 1000}s</strong></div>
-    <div class="kv"><span>Hide down interfaces</span><strong>${settings.hideDownInterfaces ? "yes" : "no"}</strong></div>
+    <div class="kv"><span>Mode</span><strong>${esc(topology.mode || "-")}</strong></div>
+    <div class="kv"><span>Source</span><strong>${esc(topology.source || "-")}</strong></div>
+    <div class="kv"><span>Updated</span><strong>${esc(new Date(topology.generatedAt).toLocaleString())}</strong></div>
+    <div class="kv"><span>Refresh interval</span><strong>${Number(els.refreshInterval.value || 0) / 1000}s</strong></div>
+    <div class="kv"><span>Default refresh</span><strong>${Number(settings.defaultRefreshMs || 0) / 1000}s</strong></div>
+    <div class="kv"><span>Hide down ports</span><strong>${settings.hideDownInterfaces ? "yes" : "no"}</strong></div>
+    <div class="kv"><span>Total devices</span><strong>${s.totalDevices || 0}</strong></div>
+    <div class="kv"><span>Total ports</span><strong>${s.totalPorts || 0}</strong></div>
+    <div class="kv"><span>Total links</span><strong>${s.totalLinks || 0}</strong></div>
+    <div class="kv"><span>Active alerts</span><strong>${s.activeAlerts || 0}</strong></div>
+    <div class="kv"><span>Layout persistence</span><strong>browser local storage</strong></div>
 
-    <h3>Current Dataset</h3>
-    <div class="kv"><span>Devices</span><strong>${s.totalDevices || 0}</strong></div>
-    <div class="kv"><span>Interfaces</span><strong>${s.totalPorts || 0}</strong></div>
-    <div class="kv"><span>Links</span><strong>${s.totalLinks || 0}</strong></div>
-    <div class="kv"><span>Traffic</span><strong>${fmtMbps((s.totalInMbps || 0) + (s.totalOutMbps || 0))}</strong></div>
-
-    <h3>Endpoint Diagnostics</h3>
+    <h3>Recommended Next Features</h3>
     <div class="list">
-      ${endpointRow("Health", "/api/health")}
-      ${endpointRow("Topology", "/api/topology")}
-      ${endpointRow("Devices", "/api/devices")}
-      ${endpointRow("Interfaces", "/api/interfaces")}
-      ${endpointRow("Links", "/api/links")}
+      <div class="item">
+        <div class="item-title"><span>ARP / MAC / FDB search</span><span>high value</span></div>
+        <div class="item-sub">Search an IP or MAC and return switch port, VLAN, and last seen time.</div>
+      </div>
+      <div class="item">
+        <div class="item-title"><span>Alert ticker</span><span>recommended</span></div>
+        <div class="item-sub">Show rolling LibreNMS alerts and optionally Slack-fed event messages.</div>
+      </div>
+      <div class="item">
+        <div class="item-title"><span>Top talkers</span><span>recommended</span></div>
+        <div class="item-sub">Highlight busiest devices, interfaces, and links on every refresh.</div>
+      </div>
+      <div class="item">
+        <div class="item-title"><span>Client location</span><span>recommended</span></div>
+        <div class="item-sub">Find where an endpoint is connected using ARP + FDB + interface detail.</div>
+      </div>
     </div>
-
-    <div class="button-row">
-      <button id="runDiagnosticsBtn">Run checks</button>
-      <button id="copyDiagnosticsBtn">Copy diagnostics</button>
-    </div>
-
-    <p class="empty">Classification hints, LibreNMS URL, token, mock mode, and refresh defaults are controlled in the server .env file.</p>
   `;
-
-  document.getElementById("runDiagnosticsBtn")?.addEventListener("click", runEndpointDiagnostics);
-  document.getElementById("copyDiagnosticsBtn")?.addEventListener("click", copyDiagnostics);
 }
+
+
 
 
 function statusKind(d) { if (d.status !== "up") return "bad"; if ((d.alerts || 0) > 0) return "warn"; return "good"; }
@@ -323,7 +454,8 @@ function showLink(l) { const src = topology.devices.find(d => d.id === l.source)
 function linkCard(l) { const src = topology.devices.find(d => d.id === l.source), dst = topology.devices.find(d => d.id === l.target); return `<div class="item"><div class="item-title"><span>${esc(src?.label || l.localDeviceLabel || l.source)} -> ${esc(dst?.label || l.remoteDeviceLabel || l.target)}</span><span>${fmtPct(l.utilPct)}</span></div><div class="item-sub">${esc(l.localPortName || "port")} -> ${esc(l.remotePortName || "port")} | ${esc(l.speedLabel || "")} | down ${fmtMbps(l.inMbps)} | up ${fmtMbps(l.outMbps)}</div><div class="bar"><i style="--w:${Math.min(Number(l.utilPct || 0), 100)}%; background:${colorByUtil(l.utilPct)}"></i></div></div>`; }
 function portCard(p) { return `<div class="item"><div class="item-title"><span>${esc(p.device_label || p.device_id)} | ${esc(p.name)}</span><span>${fmtPct(p.utilPct)}</span></div><div class="item-sub">${esc(p.ifAlias || p.ifName || "")} | ${esc(p.ifOperStatus || "unknown")} | ${esc(p.speedLabel || "unknown")} | down ${fmtMbps(p.inMbps)} | up ${fmtMbps(p.outMbps)}</div><div class="bar"><i style="--w:${Math.min(Number(p.utilPct || 0), 100)}%; background:${colorByUtil(p.utilPct)}"></i></div></div>`; }
 function setActiveNav(view) { document.querySelectorAll(".nav-btn").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view)); }
-function renderActivePanel() { if (!topology) return; if (activeView === "overview") return showOverview(); if (activeView === "devices") return showDevices(); if (activeView === "interfaces") return showInterfaces(); if (activeView === "links") return showLinks(); if (activeView === "alerts") return showAlerts(); if (activeView === "settings") return showSettings(); return showMapPanel(); }
+function renderActivePanel() { if (!topology) return; if (activeView === "overview") return showOverview(); if (activeView === "devices") return showDevices(); if (activeView === "interfaces") return showInterfaces();
+  if (activeView === "search") return showSearch(); if (activeView === "links") return showLinks(); if (activeView === "alerts") return showAlerts(); if (activeView === "settings") return showSettings(); return showMapPanel(); }
 function filterMap(query) { if (!cy) return; const q = query.trim().toLowerCase(); cy.elements().removeClass("faded"); if (!q) return; cy.elements().addClass("faded"); cy.nodes().forEach(node => { const raw = node.data("raw") || {}; if (JSON.stringify(raw).toLowerCase().includes(q)) { node.removeClass("faded"); node.connectedEdges().removeClass("faded"); node.connectedEdges().connectedNodes().removeClass("faded"); } }); }
 function applyRoleFilter() { if (!cy) return; const role = els.roleFilter.value; cy.elements().removeClass("hiddenByFilter"); if (!role) return; cy.nodes().forEach(node => { if (node.data("role") !== role) node.addClass("hiddenByFilter"); }); }
 function scheduleRefresh() { clearInterval(refreshTimer); refreshTimer = setInterval(loadTopology, Number(els.refreshInterval.value || 30000)); }
