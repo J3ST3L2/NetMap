@@ -1,17 +1,18 @@
 {
   "name": "librenms-netmap-dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Interactive LibreNMS-powered topology dashboard with vertical navigation.",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "NODE_ENV=development node server.js"
+    "dev": "NODE_ENV=development MOCK_MODE=auto node server.js"
   },
   "dependencies": {
     "axios": "^1.7.9",
     "cors": "^2.8.5",
     "cytoscape": "^3.31.0",
+    "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "helmet": "^7.2.0",
     "morgan": "^1.10.0"

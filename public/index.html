@@ -2,115 +2,107 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>LibreNMS NetMap</title>
+  <title>NetMap</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar">
+  <div class="app">
+    <aside class="rail">
       <div class="brand">
-        <div class="brand-mark">◆</div>
+        <div class="brand-icon">N</div>
         <div>
-          <div class="brand-title">LibreNMS</div>
-          <div class="brand-subtitle">NetMap</div>
+          <div class="brand-name">NetMap</div>
+          <div class="brand-sub">LibreNMS UI</div>
         </div>
       </div>
 
       <nav class="nav">
-        <button class="nav-item active" data-panel="map">⌁ <span>Network Map</span></button>
-        <button class="nav-item" data-panel="overview">◷ <span>Overview</span></button>
-        <button class="nav-item" data-panel="devices">▦ <span>Devices</span></button>
-        <button class="nav-item" data-panel="ports">⇄ <span>Ports</span></button>
-        <button class="nav-item" data-panel="alerts">⚠ <span>Alerts</span><b id="navAlertCount">0</b></button>
-        <button class="nav-item" data-panel="settings">⚙ <span>Settings</span></button>
+        <button class="nav-btn active" data-view="map"><span>⌁</span><b>Map</b></button>
+        <button class="nav-btn" data-view="overview"><span>◷</span><b>Overview</b></button>
+        <button class="nav-btn" data-view="devices"><span>▦</span><b>Devices</b></button>
+        <button class="nav-btn" data-view="links"><span>⇄</span><b>Links</b></button>
+        <button class="nav-btn" data-view="alerts"><span>⚠</span><b>Alerts</b><em id="navAlerts">0</em></button>
+        <button class="nav-btn" data-view="settings"><span>⚙</span><b>Settings</b></button>
       </nav>
 
-      <section class="sidebar-card">
-        <div class="section-title">Device Status</div>
-        <div class="donut-wrap">
-          <div class="donut" id="deviceDonut"><span id="totalDevices">0</span><small>Total</small></div>
-          <div class="legend">
-            <div><i class="dot up"></i> Up <strong id="upDevices">0</strong></div>
-            <div><i class="dot down"></i> Down <strong id="downDevices">0</strong></div>
-            <div><i class="dot warn"></i> Alerts <strong id="activeAlerts">0</strong></div>
-          </div>
+      <section class="rail-card">
+        <div class="small-label">Live Status</div>
+        <div class="status-stack">
+          <div><i class="led good"></i><span id="railUp">0 up</span></div>
+          <div><i class="led bad"></i><span id="railDown">0 down</span></div>
+          <div><i class="led warn"></i><span id="railAlerts">0 alerts</span></div>
         </div>
       </section>
 
-      <section class="sidebar-card">
-        <div class="section-title">Traffic Summary</div>
-        <div class="traffic-row"><span>Inbound</span><strong id="sumIn">0 Mbps</strong></div>
-        <div class="traffic-row"><span>Outbound</span><strong id="sumOut">0 Mbps</strong></div>
-        <div class="mini-spark" id="spark"></div>
+      <section class="rail-card">
+        <div class="small-label">Traffic</div>
+        <div class="big-number" id="railTraffic">0 Mbps</div>
+        <div class="traffic-mini">
+          <span id="railIn">↓ 0</span>
+          <span id="railOut">↑ 0</span>
+        </div>
       </section>
     </aside>
 
-    <main class="main">
-      <header class="topbar">
+    <main class="workspace">
+      <header class="hero">
         <div>
-          <h1>Network Map</h1>
-          <p id="sourceLabel">Waiting for LibreNMS data…</p>
+          <div class="eyebrow"><span id="modeBadge">loading</span><span id="sourceBadge">LibreNMS</span></div>
+          <h1 id="title">DGE Sophos Enclave</h1>
+          <p id="subtitle">UXG edge, Sophos server-front, monitored by LibreNMS</p>
         </div>
-        <div class="topbar-actions">
-          <input id="searchBox" placeholder="Search devices, ports, IPs…" />
+
+        <div class="actions">
+          <input id="searchBox" placeholder="Search devices, ports, IPs..." />
+          <select id="refreshInterval">
+            <option value="15000">15 sec</option>
+            <option value="30000" selected>30 sec</option>
+            <option value="60000">60 sec</option>
+            <option value="300000">5 min</option>
+          </select>
           <button id="refreshBtn">Refresh</button>
-          <button id="autoLayoutBtn">Auto Layout</button>
-          <button id="clearLayoutBtn" title="Clear saved browser positions">Reset Layout</button>
+          <button id="fitBtn">Fit</button>
+          <button id="resetBtn">Reset layout</button>
         </div>
       </header>
 
-      <div class="content-grid">
-        <section class="map-card">
+      <section class="kpis">
+        <article class="kpi"><span>Total Devices</span><strong id="kpiDevices">0</strong><small id="kpiDevicesSub">0 up / 0 down</small></article>
+        <article class="kpi"><span>Discovered Links</span><strong id="kpiLinks">0</strong><small>LLDP/CDP resources</small></article>
+        <article class="kpi"><span>Traffic</span><strong id="kpiTraffic">0 Mbps</strong><small id="kpiTrafficSub">↓ 0 / ↑ 0</small></article>
+        <article class="kpi alert"><span>Active Alerts</span><strong id="kpiAlerts">0</strong><small>LibreNMS alert state</small></article>
+      </section>
+
+      <section class="main-grid">
+        <div class="map-shell">
           <div class="map-toolbar">
-            <select id="refreshInterval">
-              <option value="15000">Refresh: 15 sec</option>
-              <option value="30000" selected>Refresh: 30 sec</option>
-              <option value="60000">Refresh: 60 sec</option>
-              <option value="300000">Refresh: 5 min</option>
-            </select>
-            <span class="pill">UXG Edge</span>
-            <span class="pill">Sophos Server Front</span>
-            <span class="pill" id="lastUpdated">Never updated</span>
+            <span class="chip edge">UXG Edge</span>
+            <span class="chip firewall">Sophos Server Front</span>
+            <span class="chip server">Server Zone</span>
+            <span class="chip" id="lastUpdated">Waiting for data</span>
           </div>
           <div id="cy"></div>
-          <div class="link-legend">
-            <span><i class="band green"></i>0–25%</span>
-            <span><i class="band lime"></i>25–50%</span>
-            <span><i class="band amber"></i>50–75%</span>
-            <span><i class="band orange"></i>75–100%</span>
-            <span><i class="band red"></i>100%+</span>
+          <div class="legend">
+            <span><i style="background:#48d16f"></i>0-25%</span>
+            <span><i style="background:#c7df42"></i>25-50%</span>
+            <span><i style="background:#ffca3a"></i>50-75%</span>
+            <span><i style="background:#ff8f2a"></i>75-100%</span>
+            <span><i style="background:#ff4d5a"></i>100%+</span>
           </div>
-        </section>
+        </div>
 
-        <aside class="details-panel">
-          <div class="details-header">
+        <aside class="inspector">
+          <div class="inspector-head">
             <div>
-              <h2 id="detailsTitle">Select a device or link</h2>
-              <p id="detailsSub">Click anything on the map for details.</p>
+              <h2 id="panelTitle">Map</h2>
+              <p id="panelSub">Click a device or link to inspect it.</p>
             </div>
-            <span id="detailsStatus" class="status-pill muted">Idle</span>
+            <span id="panelStatus" class="pill neutral">ready</span>
           </div>
-
-          <div class="tabs">
-            <button class="tab active">Overview</button>
-            <button class="tab">Ports</button>
-            <button class="tab">Alerts</button>
-            <button class="tab">Graphs</button>
-          </div>
-
-          <div id="detailsBody" class="details-body">
-            <p class="empty">Topology will populate from LibreNMS devices, discovered links, and port counters.</p>
-          </div>
+          <div id="panelBody" class="panel-body"></div>
         </aside>
-      </div>
-
-      <footer class="metrics">
-        <div class="metric"><span>Total Bandwidth</span><strong id="metricBandwidth">0 Mbps</strong><small id="metricBandwidthSub">↓ 0 ↑ 0</small></div>
-        <div class="metric"><span>Total Devices</span><strong id="metricDevices">0</strong><small id="metricDevicesSub">0 up / 0 down</small></div>
-        <div class="metric"><span>Total Links</span><strong id="metricLinks">0</strong><small>Discovered from LibreNMS</small></div>
-        <div class="metric"><span>Alerts</span><strong id="metricAlerts">0</strong><small>Active alerts</small></div>
-      </footer>
+      </section>
     </main>
   </div>
 

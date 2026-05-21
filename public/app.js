@@ -2,20 +2,24 @@ let cy;
 let topology = null;
 let refreshTimer = null;
 let dashOffset = 0;
+let activeView = "map";
 
 const els = {
-  sourceLabel: document.getElementById("sourceLabel"),
-  lastUpdated: document.getElementById("lastUpdated"),
-  refreshBtn: document.getElementById("refreshBtn"),
-  autoLayoutBtn: document.getElementById("autoLayoutBtn"),
-  clearLayoutBtn: document.getElementById("clearLayoutBtn"),
-  refreshInterval: document.getElementById("refreshInterval"),
+  title: document.getElementById("title"),
+  subtitle: document.getElementById("subtitle"),
+  modeBadge: document.getElementById("modeBadge"),
+  sourceBadge: document.getElementById("sourceBadge"),
   searchBox: document.getElementById("searchBox"),
-  toast: document.getElementById("toast"),
-  detailsTitle: document.getElementById("detailsTitle"),
-  detailsSub: document.getElementById("detailsSub"),
-  detailsStatus: document.getElementById("detailsStatus"),
-  detailsBody: document.getElementById("detailsBody")
+  refreshInterval: document.getElementById("refreshInterval"),
+  refreshBtn: document.getElementById("refreshBtn"),
+  fitBtn: document.getElementById("fitBtn"),
+  resetBtn: document.getElementById("resetBtn"),
+  lastUpdated: document.getElementById("lastUpdated"),
+  panelTitle: document.getElementById("panelTitle"),
+  panelSub: document.getElementById("panelSub"),
+  panelStatus: document.getElementById("panelStatus"),
+  panelBody: document.getElementById("panelBody"),
+  toast: document.getElementById("toast")
 };
 
 function fmtMbps(value) {
@@ -33,43 +37,57 @@ function fmtPct(value) {
   return `${n.toFixed(2)}%`;
 }
 
-function edgeColor(util) {
-  if (util >= 100) return "#ff4c4c";
-  if (util >= 75) return "#ff8b2b";
-  if (util >= 50) return "#ffc241";
-  if (util >= 25) return "#a8de39";
-  return "#52d866";
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function nodeColor(device) {
-  if (device.status !== "up") return "#ff4c4c";
-  if (device.alerts > 0) return "#ffc241";
+function colorByUtil(util) {
+  const u = Number(util || 0);
+  if (u >= 100) return "#ff4d5a";
+  if (u >= 75) return "#ff8f2a";
+  if (u >= 50) return "#ffca3a";
+  if (u >= 25) return "#c7df42";
+  return "#48d16f";
+}
+
+function colorByRole(device) {
+  if (device.status !== "up") return "#ff4d5a";
+  if (device.alerts > 0) return "#ffca3a";
   if (device.role === "edge") return "#35e3ff";
-  if (device.role === "firewall") return "#3a7cff";
-  if (device.role === "core") return "#52d866";
-  if (device.role === "server") return "#a6b8ca";
-  return "#3aa7ff";
+  if (device.role === "firewall") return "#38a8ff";
+  if (device.role === "core") return "#48d16f";
+  if (device.role === "switch") return "#c7df42";
+  if (device.role === "server") return "#a78bfa";
+  return "#8fa9c1";
 }
 
-function iconForRole(role) {
-  if (role === "edge") return "◎";
-  if (role === "firewall") return "盾";
-  if (role === "core") return "▣";
-  if (role === "switch") return "▤";
-  if (role === "server") return "▥";
-  return "◆";
+function iconByRole(role) {
+  const map = {
+    edge: "EDGE",
+    firewall: "FW",
+    core: "CORE",
+    switch: "SW",
+    server: "SRV",
+    network: "NET"
+  };
+  return map[role] || "NET";
 }
 
-function showToast(message, timeout = 4200) {
+function showToast(message, timeout = 4500) {
   els.toast.textContent = message;
   els.toast.classList.remove("hidden");
-  window.clearTimeout(showToast._timer);
-  showToast._timer = window.setTimeout(() => els.toast.classList.add("hidden"), timeout);
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => els.toast.classList.add("hidden"), timeout);
 }
 
 function savedPositions() {
   try {
-    return JSON.parse(localStorage.getItem("librenms-netmap-positions") || "{}");
+    return JSON.parse(localStorage.getItem("netmap.positions.v2") || "{}");
   } catch {
     return {};
   }
@@ -77,63 +95,62 @@ function savedPositions() {
 
 function savePositions() {
   if (!cy) return;
-  const positions = {};
+  const out = {};
   cy.nodes().forEach(node => {
-    positions[node.id()] = node.position();
+    out[node.id()] = node.position();
   });
-  localStorage.setItem("librenms-netmap-positions", JSON.stringify(positions));
+  localStorage.setItem("netmap.positions.v2", JSON.stringify(out));
 }
 
 function clearPositions() {
-  localStorage.removeItem("librenms-netmap-positions");
+  localStorage.removeItem("netmap.positions.v2");
   renderTopology(true);
+  showToast("Saved layout cleared.");
 }
 
-function deviceSortRank(device) {
+function rank(device) {
   const ranks = { edge: 0, core: 1, switch: 2, firewall: 3, server: 4, network: 5 };
   return ranks[device.role] ?? 9;
 }
 
-function guessPositions(devices) {
-  const width = Math.max(document.getElementById("cy").clientWidth, 900);
+function guessedPositions(devices) {
+  const el = document.getElementById("cy");
+  const width = Math.max(el.clientWidth, 1000);
   const center = width / 2;
   const positions = {};
 
-  const sorted = [...devices].sort((a, b) => deviceSortRank(a) - deviceSortRank(b) || a.label.localeCompare(b.label));
-  const edge = sorted.filter(d => d.role === "edge");
-  const core = sorted.filter(d => d.role === "core");
-  const switches = sorted.filter(d => d.role === "switch" || d.role === "network");
-  const firewalls = sorted.filter(d => d.role === "firewall");
-  const servers = sorted.filter(d => d.role === "server");
+  const byRole = role => devices
+    .filter(d => d.role === role)
+    .sort((a, b) => a.label.localeCompare(b.label));
 
-  const placeRow = (items, y, spread) => {
+  const edges = byRole("edge");
+  const cores = byRole("core");
+  const switches = [...byRole("switch"), ...byRole("network")];
+  const firewalls = byRole("firewall");
+  const servers = byRole("server");
+
+  function place(items, y, spacing, xCenter = center) {
     const count = Math.max(items.length, 1);
     items.forEach((d, i) => {
-      const x = center + (i - (count - 1) / 2) * spread;
-      positions[d.id] = { x, y };
+      positions[d.id] = {
+        x: xCenter + (i - (count - 1) / 2) * spacing,
+        y
+      };
     });
-  };
-
-  placeRow(edge, 130, 240);
-  placeRow(core, 280, 260);
-
-  if (switches.length <= 2) {
-    placeRow(switches, 430, 520);
-  } else {
-    placeRow(switches, 430, 260);
   }
 
-  placeRow(firewalls, 470, 260);
-  placeRow(servers, 620, 220);
+  place(edges, 130, 280);
+  place(cores, 285, 320);
+  place(switches, 455, 250, center - 130);
+  place(firewalls, 455, 280, center + 340);
+  place(servers, 635, 210, center + 340);
 
-  let extraIndex = 0;
+  let idx = 0;
+  const sorted = [...devices].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
   for (const d of sorted) {
     if (!positions[d.id]) {
-      positions[d.id] = {
-        x: 120 + (extraIndex % 5) * 220,
-        y: 760 + Math.floor(extraIndex / 5) * 140
-      };
-      extraIndex += 1;
+      positions[d.id] = { x: 160 + (idx % 5) * 210, y: 780 + Math.floor(idx / 5) * 140 };
+      idx++;
     }
   }
 
@@ -142,18 +159,18 @@ function guessPositions(devices) {
 
 function buildElements(data, forceAuto = false) {
   const saved = forceAuto ? {} : savedPositions();
-  const guessed = guessPositions(data.devices);
+  const guessed = guessedPositions(data.devices);
 
   const nodes = data.devices.map(device => ({
     data: {
       id: device.id,
       label: device.label,
-      subtitle: device.ip || device.hostname || "",
-      icon: iconForRole(device.role),
-      color: nodeColor(device),
       role: device.role,
+      badge: iconByRole(device.role),
+      subtitle: device.ip || device.hostname || "",
+      color: colorByRole(device),
       status: device.status,
-      alerts: device.alerts,
+      alerts: device.alerts || 0,
       raw: device
     },
     position: saved[device.id] || guessed[device.id]
@@ -161,14 +178,15 @@ function buildElements(data, forceAuto = false) {
 
   const edges = data.links.map(link => {
     const util = Number(link.utilPct || 0);
+    const traffic = Math.max(Number(link.inMbps || 0), Number(link.outMbps || 0));
     return {
       data: {
         id: link.id,
         source: link.source,
         target: link.target,
-        label: `↓ ${fmtMbps(link.inMbps)}  ↑ ${fmtMbps(link.outMbps)}`,
-        color: edgeColor(util),
-        width: Math.max(2, Math.min(12, 2 + Math.sqrt(Math.max(link.inMbps, link.outMbps, 1)) / 4)),
+        label: `${fmtMbps(link.inMbps)} down / ${fmtMbps(link.outMbps)} up`,
+        color: colorByUtil(util),
+        width: Math.max(2, Math.min(13, 2 + Math.sqrt(Math.max(traffic, 1)) / 3.5)),
         util,
         raw: link
       }
@@ -183,32 +201,34 @@ function initCy() {
     container: document.getElementById("cy"),
     elements: [],
     layout: { name: "preset" },
-    wheelSensitivity: 0.18,
+    wheelSensitivity: 0.16,
+    minZoom: 0.25,
+    maxZoom: 2.2,
     style: [
       {
         selector: "node",
         style: {
           "shape": "round-rectangle",
-          "width": 122,
-          "height": 64,
+          "width": 132,
+          "height": 68,
           "background-color": "data(color)",
-          "background-opacity": 0.17,
+          "background-opacity": 0.13,
           "border-color": "data(color)",
           "border-width": 2,
-          "border-opacity": 0.9,
-          "label": ele => `${ele.data("icon")}  ${ele.data("label")}\n${ele.data("subtitle")}`,
+          "border-opacity": 0.95,
+          "label": ele => `${ele.data("badge")}  ${ele.data("label")}\n${ele.data("subtitle")}`,
           "text-wrap": "wrap",
-          "text-max-width": 150,
+          "text-max-width": 152,
           "text-valign": "center",
           "text-halign": "center",
-          "font-size": 12,
-          "font-weight": 700,
-          "color": "#eef6ff",
+          "font-size": 11,
+          "font-weight": 750,
+          "color": "#eef7ff",
           "text-outline-width": 2,
-          "text-outline-color": "#071525",
-          "shadow-blur": 18,
+          "text-outline-color": "#06101c",
+          "shadow-blur": 20,
           "shadow-color": "data(color)",
-          "shadow-opacity": 0.35,
+          "shadow-opacity": 0.30,
           "shadow-offset-x": 0,
           "shadow-offset-y": 0
         }
@@ -217,7 +237,7 @@ function initCy() {
         selector: 'node[status = "down"]',
         style: {
           "border-style": "dashed",
-          "background-opacity": 0.09
+          "background-opacity": 0.07
         }
       },
       {
@@ -236,18 +256,18 @@ function initCy() {
           "source-arrow-color": "data(color)",
           "target-arrow-shape": "triangle",
           "source-arrow-shape": "triangle",
-          "arrow-scale": 0.75,
-          "opacity": 0.88,
+          "arrow-scale": .7,
+          "opacity": .88,
           "label": "data(label)",
-          "font-size": 11,
-          "color": "#d8e9ff",
-          "text-outline-color": "#071525",
+          "font-size": 10,
+          "color": "#dceeff",
+          "text-outline-color": "#06101c",
           "text-outline-width": 3,
-          "text-background-color": "#06111d",
-          "text-background-opacity": 0.68,
+          "text-background-color": "#06101c",
+          "text-background-opacity": .62,
           "text-background-padding": 4,
           "line-style": "dashed",
-          "line-dash-pattern": [10, 8],
+          "line-dash-pattern": [12, 9],
           "line-dash-offset": 0
         }
       },
@@ -263,7 +283,7 @@ function initCy() {
       {
         selector: ".faded",
         style: {
-          "opacity": 0.13
+          "opacity": .12
         }
       }
     ]
@@ -271,81 +291,86 @@ function initCy() {
 
   cy.on("dragfree", "node", savePositions);
 
-  cy.on("tap", "node", event => showDeviceDetails(event.target.data("raw")));
-  cy.on("tap", "edge", event => showLinkDetails(event.target.data("raw")));
+  cy.on("tap", "node", event => {
+    activeView = "map";
+    setActiveNav("map");
+    focusNeighborhood(event.target);
+    showDevice(event.target.data("raw"));
+  });
+
+  cy.on("tap", "edge", event => {
+    activeView = "map";
+    setActiveNav("map");
+    showLink(event.target.data("raw"));
+  });
 
   cy.on("tap", event => {
     if (event.target === cy) {
-      clearSelectionDetails();
       cy.elements().removeClass("faded");
+      if (activeView === "map") showMapPanel();
     }
   });
 
-  cy.on("mouseover", "node", event => {
-    const node = event.target;
-    cy.elements().addClass("faded");
-    node.removeClass("faded");
-    node.connectedEdges().removeClass("faded");
-    node.connectedEdges().connectedNodes().removeClass("faded");
-  });
-
-  cy.on("mouseout", "node", () => cy.elements().removeClass("faded"));
-
   setInterval(() => {
     if (!cy) return;
-    dashOffset = (dashOffset - 1) % 18;
+    dashOffset = (dashOffset - 1) % 22;
     cy.edges().style("line-dash-offset", dashOffset);
-  }, 90);
+  }, 80);
+}
+
+function focusNeighborhood(node) {
+  cy.elements().addClass("faded");
+  node.removeClass("faded");
+  node.connectedEdges().removeClass("faded");
+  node.connectedEdges().connectedNodes().removeClass("faded");
 }
 
 function renderTopology(forceAuto = false) {
   if (!topology || !cy) return;
   cy.elements().remove();
   cy.add(buildElements(topology, forceAuto));
-  cy.layout({ name: "preset", fit: true, padding: 70 }).run();
-  cy.fit(undefined, 70);
-  updateSummary(topology);
+  cy.layout({ name: "preset", fit: true, padding: 74 }).run();
+  cy.fit(undefined, 74);
+  updateSummary();
+  renderActivePanel();
 }
 
-function updateSummary(data) {
+function updateSummary() {
+  const data = topology;
   const s = data.summary || {};
-  const totalMbps = Number(s.totalInMbps || 0) + Number(s.totalOutMbps || 0);
+  const totalTraffic = Number(s.totalInMbps || 0) + Number(s.totalOutMbps || 0);
 
-  document.getElementById("totalDevices").textContent = s.totalDevices || 0;
-  document.getElementById("upDevices").textContent = s.upDevices || 0;
-  document.getElementById("downDevices").textContent = s.downDevices || 0;
-  document.getElementById("activeAlerts").textContent = s.activeAlerts || 0;
-  document.getElementById("navAlertCount").textContent = s.activeAlerts || 0;
-  document.getElementById("sumIn").textContent = fmtMbps(s.totalInMbps);
-  document.getElementById("sumOut").textContent = fmtMbps(s.totalOutMbps);
+  els.title.textContent = data.title || "NetMap";
+  els.subtitle.textContent = data.subtitle || "LibreNMS topology dashboard";
 
-  document.getElementById("metricBandwidth").textContent = fmtMbps(totalMbps);
-  document.getElementById("metricBandwidthSub").textContent = `↓ ${fmtMbps(s.totalInMbps)}  ↑ ${fmtMbps(s.totalOutMbps)}`;
-  document.getElementById("metricDevices").textContent = s.totalDevices || 0;
-  document.getElementById("metricDevicesSub").textContent = `${s.upDevices || 0} up / ${s.downDevices || 0} down`;
-  document.getElementById("metricLinks").textContent = s.totalLinks || 0;
-  document.getElementById("metricAlerts").textContent = s.activeAlerts || 0;
+  els.modeBadge.textContent = data.mode || "live";
+  els.modeBadge.className = data.mode === "mock" ? "mock" : "live";
+  els.sourceBadge.textContent = data.mode === "mock" ? "Demo data" : "LibreNMS";
 
-  const up = Number(s.upDevices || 0);
-  const down = Number(s.downDevices || 0);
-  const total = Math.max(Number(s.totalDevices || 0), 1);
-  const upDeg = Math.round(up / total * 360);
-  const downDeg = Math.round((up + down) / total * 360);
-  document.getElementById("deviceDonut").style.background =
-    `conic-gradient(var(--green) 0deg, var(--green) ${upDeg}deg, var(--red) ${upDeg}deg, var(--red) ${downDeg}deg, var(--amber) ${downDeg}deg)`;
+  document.getElementById("kpiDevices").textContent = s.totalDevices || 0;
+  document.getElementById("kpiDevicesSub").textContent = `${s.upDevices || 0} up / ${s.downDevices || 0} down`;
+  document.getElementById("kpiLinks").textContent = s.totalLinks || 0;
+  document.getElementById("kpiTraffic").textContent = fmtMbps(totalTraffic);
+  document.getElementById("kpiTrafficSub").textContent = `↓ ${fmtMbps(s.totalInMbps)} / ↑ ${fmtMbps(s.totalOutMbps)}`;
+  document.getElementById("kpiAlerts").textContent = s.activeAlerts || 0;
 
-  els.sourceLabel.textContent = `Source: ${data.source}`;
+  document.getElementById("railUp").textContent = `${s.upDevices || 0} up`;
+  document.getElementById("railDown").textContent = `${s.downDevices || 0} down`;
+  document.getElementById("railAlerts").textContent = `${s.activeAlerts || 0} alerts`;
+  document.getElementById("railTraffic").textContent = fmtMbps(totalTraffic);
+  document.getElementById("railIn").textContent = `↓ ${fmtMbps(s.totalInMbps)}`;
+  document.getElementById("railOut").textContent = `↑ ${fmtMbps(s.totalOutMbps)}`;
+  document.getElementById("navAlerts").textContent = s.activeAlerts || 0;
+
   els.lastUpdated.textContent = `Updated ${new Date(data.generatedAt).toLocaleTimeString()}`;
 
-  const warningValues = Object.values(data.warnings || {}).filter(Boolean);
-  if (warningValues.length) {
-    showToast(`Loaded topology with warning: ${warningValues[0]}`);
-  }
+  const warnings = Object.values(data.warnings || {}).filter(Boolean);
+  if (warnings.length) showToast(warnings[0]);
 }
 
 async function loadTopology({ forceAuto = false } = {}) {
   els.refreshBtn.disabled = true;
-  els.refreshBtn.textContent = "Loading…";
+  els.refreshBtn.textContent = "Loading...";
   try {
     const res = await fetch("/api/topology", { cache: "no-store" });
     const data = await res.json();
@@ -354,94 +379,188 @@ async function loadTopology({ forceAuto = false } = {}) {
     renderTopology(forceAuto);
   } catch (err) {
     showToast(err.message || String(err), 8000);
-    els.sourceLabel.textContent = "LibreNMS API not reachable or not configured.";
   } finally {
     els.refreshBtn.disabled = false;
     els.refreshBtn.textContent = "Refresh";
   }
 }
 
-function statusClass(status, alerts = 0) {
-  if (status !== "up") return "down";
-  if (alerts > 0) return "warn";
-  return "up";
+function setPill(text, kind = "neutral") {
+  els.panelStatus.textContent = text;
+  els.panelStatus.className = `pill ${kind}`;
 }
 
-function setStatusPill(text, cls) {
-  els.detailsStatus.className = `status-pill ${cls}`;
-  els.detailsStatus.textContent = text;
+function showMapPanel() {
+  els.panelTitle.textContent = "Map";
+  els.panelSub.textContent = "Click a node or link to inspect it.";
+  setPill("ready");
+  els.panelBody.innerHTML = `
+    <p class="empty">This map is built from LibreNMS devices, links, ports, and alerts. Drag nodes to adjust the layout; your browser saves the positions.</p>
+    <div class="kv"><span>Layout</span><strong>UXG edge -> core/switching -> Sophos -> servers</strong></div>
+    <div class="kv"><span>Traffic</span><strong>Animated from port counters</strong></div>
+    <div class="kv"><span>Refresh</span><strong>${Number(els.refreshInterval.value) / 1000}s</strong></div>
+  `;
 }
 
-function showDeviceDetails(device) {
-  setStatusPill(device.alerts > 0 ? `${device.alerts} Alert${device.alerts === 1 ? "" : "s"}` : device.status, statusClass(device.status, device.alerts));
-  els.detailsTitle.textContent = device.label;
-  els.detailsSub.textContent = `${device.role.toUpperCase()} • ${device.ip || device.hostname || "No IP"}`;
+function showOverview() {
+  const s = topology.summary;
+  const busiest = [...topology.links].sort((a, b) => Math.max(b.inMbps, b.outMbps) - Math.max(a.inMbps, a.outMbps)).slice(0, 5);
+  els.panelTitle.textContent = "Overview";
+  els.panelSub.textContent = "Network health and busiest links.";
+  setPill(topology.mode, topology.mode === "mock" ? "warn" : "good");
+  els.panelBody.innerHTML = `
+    <div class="kv"><span>Devices</span><strong>${s.totalDevices}</strong></div>
+    <div class="kv"><span>Links</span><strong>${s.totalLinks}</strong></div>
+    <div class="kv"><span>Traffic</span><strong>${fmtMbps(s.totalInMbps + s.totalOutMbps)}</strong></div>
+    <div class="kv"><span>Alerts</span><strong>${s.activeAlerts}</strong></div>
+    <h3>Busiest Links</h3>
+    <div class="list">
+      ${busiest.map(linkCard).join("") || `<p class="empty">No links found.</p>`}
+    </div>
+  `;
+}
+
+function showDevices() {
+  const devices = [...topology.devices].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
+  els.panelTitle.textContent = "Devices";
+  els.panelSub.textContent = `${devices.length} monitored devices.`;
+  setPill("inventory");
+  els.panelBody.innerHTML = `
+    <div class="list">
+      ${devices.map(d => `
+        <div class="item clickable" data-node="${escapeHtml(d.id)}">
+          <div class="item-title"><span>${escapeHtml(d.label)}</span><span>${escapeHtml(d.role)}</span></div>
+          <div class="item-sub">${escapeHtml(d.ip || d.hostname || "No IP")} · ${escapeHtml(d.status)} · ${d.alerts || 0} alerts</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+  els.panelBody.querySelectorAll("[data-node]").forEach(el => {
+    el.addEventListener("click", () => {
+      const node = cy.getElementById(el.dataset.node);
+      if (node.length) {
+        cy.animate({ center: { eles: node }, zoom: 1.05 }, { duration: 300 });
+        node.select();
+        focusNeighborhood(node);
+        showDevice(node.data("raw"));
+      }
+    });
+  });
+}
+
+function showLinks() {
+  const links = [...topology.links].sort((a, b) => Number(b.utilPct || 0) - Number(a.utilPct || 0));
+  els.panelTitle.textContent = "Links";
+  els.panelSub.textContent = `${links.length} discovered topology links.`;
+  setPill("traffic");
+  els.panelBody.innerHTML = `<div class="list">${links.map(linkCard).join("") || `<p class="empty">No discovered links found.</p>`}</div>`;
+}
+
+function showAlerts() {
+  const alerts = topology.alerts || [];
+  els.panelTitle.textContent = "Alerts";
+  els.panelSub.textContent = `${alerts.length} active alert records.`;
+  setPill(alerts.length ? "active" : "clear", alerts.length ? "warn" : "good");
+  els.panelBody.innerHTML = `
+    <div class="list">
+      ${alerts.map(a => `
+        <div class="item">
+          <div class="item-title"><span>${escapeHtml(a.title || a.rule || a.name || "Alert")}</span><span>${escapeHtml(a.severity || a.state || "active")}</span></div>
+          <div class="item-sub">${escapeHtml(a.hostname || a.device || a.device_id || "")} · ${escapeHtml(a.timestamp || a.time_logged || "")}</div>
+        </div>
+      `).join("") || `<p class="empty">No active alerts returned.</p>`}
+    </div>
+  `;
+}
+
+function showSettings() {
+  els.panelTitle.textContent = "Settings";
+  els.panelSub.textContent = "Runtime settings live in the server .env file.";
+  setPill("config");
+  els.panelBody.innerHTML = `
+    <div class="kv"><span>Mode</span><strong>${escapeHtml(topology.mode)}</strong></div>
+    <div class="kv"><span>Source</span><strong>${escapeHtml(topology.source)}</strong></div>
+    <div class="kv"><span>Mock mode</span><strong>Set MOCK_MODE=true/false/auto</strong></div>
+    <div class="kv"><span>Layout</span><strong>Saved in browser local storage</strong></div>
+    <p class="empty">To test without LibreNMS, set MOCK_MODE=true in .env and rebuild the container.</p>
+  `;
+}
+
+function statusKind(device) {
+  if (device.status !== "up") return "bad";
+  if ((device.alerts || 0) > 0) return "warn";
+  return "good";
+}
+
+function showDevice(device) {
+  els.panelTitle.textContent = device.label;
+  els.panelSub.textContent = `${device.role.toUpperCase()} · ${device.ip || device.hostname || "No IP"}`;
+  setPill(device.status, statusKind(device));
 
   const links = topology.links.filter(l => l.source === device.id || l.target === device.id);
-  const topLinks = [...links].sort((a, b) => Number(b.utilPct || 0) - Number(a.utilPct || 0)).slice(0, 5);
-
-  els.detailsBody.innerHTML = `
+  els.panelBody.innerHTML = `
     <div class="kv"><span>Hostname</span><strong>${escapeHtml(device.hostname || device.sysName || "—")}</strong></div>
-    <div class="kv"><span>IP Address</span><strong>${escapeHtml(device.ip || "—")}</strong></div>
+    <div class="kv"><span>IP</span><strong>${escapeHtml(device.ip || "—")}</strong></div>
     <div class="kv"><span>OS</span><strong>${escapeHtml(device.os || "—")}</strong></div>
     <div class="kv"><span>Hardware</span><strong>${escapeHtml(device.hardware || "—")}</strong></div>
     <div class="kv"><span>Location</span><strong>${escapeHtml(device.location || "—")}</strong></div>
     <div class="kv"><span>Links</span><strong>${links.length}</strong></div>
     <div class="kv"><span>Alerts</span><strong>${device.alerts || 0}</strong></div>
-
-    <div class="port-list">
-      ${topLinks.map(link => `
-        <div class="port-item">
-          <strong>${escapeHtml(link.localPortName)} ⇄ ${escapeHtml(link.remotePortName)}</strong>
-          <div>↓ ${fmtMbps(link.inMbps)} &nbsp; ↑ ${fmtMbps(link.outMbps)} &nbsp; ${fmtPct(link.utilPct)}</div>
-          <div class="bar"><i style="--w:${Math.min(Number(link.utilPct || 0), 100)}%; background:${edgeColor(Number(link.utilPct || 0))}"></i></div>
-        </div>
-      `).join("") || `<p class="empty">No discovered links found for this device.</p>`}
-    </div>
+    <h3>Connected Links</h3>
+    <div class="list">${links.map(linkCard).join("") || `<p class="empty">No links found for this device.</p>`}</div>
   `;
 }
 
-function showLinkDetails(link) {
-  setStatusPill(link.status, link.status === "up" ? "up" : "down");
-  els.detailsTitle.textContent = `${link.localPortName} ⇄ ${link.remotePortName}`;
-  els.detailsSub.textContent = `${link.protocol.toUpperCase()} • ${fmtPct(link.utilPct)} utilization`;
+function showLink(link) {
+  const src = topology.devices.find(d => d.id === link.source);
+  const dst = topology.devices.find(d => d.id === link.target);
+  els.panelTitle.textContent = `${src?.label || link.source} ⇄ ${dst?.label || link.target}`;
+  els.panelSub.textContent = `${link.localPortName || "port"} ⇄ ${link.remotePortName || "port"}`;
+  setPill(fmtPct(link.utilPct), Number(link.utilPct) >= 75 ? "warn" : "good");
 
-  const source = topology.devices.find(d => d.id === link.source);
-  const target = topology.devices.find(d => d.id === link.target);
-
-  els.detailsBody.innerHTML = `
-    <div class="kv"><span>Source</span><strong>${escapeHtml(source?.label || link.source)}</strong></div>
-    <div class="kv"><span>Target</span><strong>${escapeHtml(target?.label || link.target)}</strong></div>
-    <div class="kv"><span>Local Port</span><strong>${escapeHtml(link.localPortName)}</strong></div>
-    <div class="kv"><span>Remote Port</span><strong>${escapeHtml(link.remotePortName)}</strong></div>
+  els.panelBody.innerHTML = `
+    <div class="kv"><span>Protocol</span><strong>${escapeHtml(link.protocol || "discovered")}</strong></div>
     <div class="kv"><span>Inbound</span><strong>${fmtMbps(link.inMbps)}</strong></div>
     <div class="kv"><span>Outbound</span><strong>${fmtMbps(link.outMbps)}</strong></div>
     <div class="kv"><span>Utilization</span><strong>${fmtPct(link.utilPct)}</strong></div>
     <div class="kv"><span>Speed</span><strong>${link.speedBps ? fmtMbps(link.speedBps / 1000 / 1000) : "—"}</strong></div>
     <div class="kv"><span>Errors/sec</span><strong>In ${Number(link.inErrorsRate || 0)} / Out ${Number(link.outErrorsRate || 0)}</strong></div>
-    <div class="port-list">
-      <div class="port-item">
-        <strong>Link Utilization</strong>
-        <div class="bar"><i style="--w:${Math.min(Number(link.utilPct || 0), 100)}%; background:${edgeColor(Number(link.utilPct || 0))}"></i></div>
-      </div>
+    <div class="item">
+      <div class="item-title"><span>Utilization</span><span>${fmtPct(link.utilPct)}</span></div>
+      <div class="bar"><i style="--w:${Math.min(Number(link.utilPct || 0), 100)}%; background:${colorByUtil(link.utilPct)}"></i></div>
     </div>
   `;
 }
 
-function clearSelectionDetails() {
-  setStatusPill("Idle", "muted");
-  els.detailsTitle.textContent = "Select a device or link";
-  els.detailsSub.textContent = "Click anything on the map for details.";
-  els.detailsBody.innerHTML = `<p class="empty">Topology will populate from LibreNMS devices, discovered links, and port counters.</p>`;
+function linkCard(link) {
+  const src = topology.devices.find(d => d.id === link.source);
+  const dst = topology.devices.find(d => d.id === link.target);
+  return `
+    <div class="item">
+      <div class="item-title">
+        <span>${escapeHtml(src?.label || link.source)} ⇄ ${escapeHtml(dst?.label || link.target)}</span>
+        <span>${fmtPct(link.utilPct)}</span>
+      </div>
+      <div class="item-sub">${escapeHtml(link.localPortName || "port")} ⇄ ${escapeHtml(link.remotePortName || "port")} · ↓ ${fmtMbps(link.inMbps)} · ↑ ${fmtMbps(link.outMbps)}</div>
+      <div class="bar"><i style="--w:${Math.min(Number(link.utilPct || 0), 100)}%; background:${colorByUtil(link.utilPct)}"></i></div>
+    </div>
+  `;
 }
 
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function setActiveNav(view) {
+  document.querySelectorAll(".nav-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  });
+}
+
+function renderActivePanel() {
+  if (!topology) return;
+  if (activeView === "overview") return showOverview();
+  if (activeView === "devices") return showDevices();
+  if (activeView === "links") return showLinks();
+  if (activeView === "alerts") return showAlerts();
+  if (activeView === "settings") return showSettings();
+  return showMapPanel();
 }
 
 function filterMap(query) {
@@ -453,8 +572,8 @@ function filterMap(query) {
   cy.elements().addClass("faded");
   cy.nodes().forEach(node => {
     const raw = node.data("raw") || {};
-    const haystack = JSON.stringify(raw).toLowerCase();
-    if (haystack.includes(q)) {
+    const text = JSON.stringify(raw).toLowerCase();
+    if (text.includes(q)) {
       node.removeClass("faded");
       node.connectedEdges().removeClass("faded");
       node.connectedEdges().connectedNodes().removeClass("faded");
@@ -463,24 +582,24 @@ function filterMap(query) {
 }
 
 function scheduleRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer);
-  const ms = Number(els.refreshInterval.value || 30000);
-  refreshTimer = setInterval(() => loadTopology(), ms);
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(loadTopology, Number(els.refreshInterval.value || 30000));
 }
 
-els.refreshBtn.addEventListener("click", () => loadTopology());
-els.autoLayoutBtn.addEventListener("click", () => renderTopology(true));
-els.clearLayoutBtn.addEventListener("click", clearPositions);
-els.refreshInterval.addEventListener("change", scheduleRefresh);
-els.searchBox.addEventListener("input", e => filterMap(e.target.value));
-
-document.querySelectorAll(".nav-item").forEach(button => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
-    button.classList.add("active");
-    showToast(`${button.textContent.trim()} panel is a placeholder in this starter. The map is wired now; the other panels can be expanded next.`);
+document.querySelectorAll(".nav-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    activeView = btn.dataset.view;
+    setActiveNav(activeView);
+    cy?.elements().removeClass("faded");
+    renderActivePanel();
   });
 });
+
+els.refreshBtn.addEventListener("click", () => loadTopology());
+els.fitBtn.addEventListener("click", () => cy?.fit(undefined, 76));
+els.resetBtn.addEventListener("click", clearPositions);
+els.refreshInterval.addEventListener("change", scheduleRefresh);
+els.searchBox.addEventListener("input", e => filterMap(e.target.value));
 
 initCy();
 loadTopology();

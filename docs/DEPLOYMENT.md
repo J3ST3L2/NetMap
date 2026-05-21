@@ -8,29 +8,27 @@ nano .env
 docker compose up -d --build
 ```
 
-Open:
-
-```text
-http://SERVER_IP:8088
-```
-
-## Required `.env`
+## Update from GitHub
 
 ```bash
-LIBRENMS_URL=https://your-librenms-url
-LIBRENMS_TOKEN=your_librenms_api_token
-PORT=8088
+cd NetMap
+git pull
+docker compose up -d --build
 ```
 
-If LibreNMS uses an internal/self-signed certificate:
+## Logs
 
 ```bash
-ALLOW_SELF_SIGNED_LIBRENMS=true
+docker compose logs -f librenms-netmap
 ```
 
-## Reverse proxy
+## Health check
 
-Nginx example:
+```bash
+curl http://localhost:8088/api/health
+```
+
+## Reverse proxy example
 
 ```nginx
 server {
@@ -45,31 +43,3 @@ server {
     }
 }
 ```
-
-## Updating after a Git pull
-
-```bash
-git pull
-docker compose up -d --build
-```
-
-## Troubleshooting
-
-Check container logs:
-
-```bash
-docker compose logs -f librenms-netmap
-```
-
-Test app health:
-
-```bash
-curl http://localhost:8088/api/health
-```
-
-If the API fails, check:
-
-- `LIBRENMS_URL`
-- `LIBRENMS_TOKEN`
-- Firewall rules between dashboard server and LibreNMS
-- Self-signed cert setting
