@@ -1,72 +1,35 @@
-# Testing
+# Testing NetMap
 
-## Test with mock data
-
-Set:
+## Health
 
 ```bash
-MOCK_MODE=true
+curl -s http://localhost:8088/api/health
 ```
 
-Then:
+## Topology summary
 
 ```bash
-docker compose up -d --build
+curl -s http://localhost:8088/api/topology | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d['summary'], indent=2)); print('mode:', d['mode']); print('source:', d['source'])"
 ```
 
-Open:
-
-```text
-http://localhost:8088
-```
-
-## Test live LibreNMS data
-
-Set:
+## Interfaces
 
 ```bash
-MOCK_MODE=false
-LIBRENMS_URL=https://your-librenms-url
-LIBRENMS_TOKEN=your_token
+curl -s http://localhost:8088/api/interfaces | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d['summary'], indent=2))"
 ```
 
-Then:
+## Top busy interfaces
 
 ```bash
-docker compose up -d --build
+curl -s http://localhost:8088/api/interfaces | python3 -c "import sys,json; d=json.load(sys.stdin); ports=sorted(d['interfaces'], key=lambda p:p.get('utilPct',0), reverse=True)[:10]; [print(f\"{p.get('device_label')} {p.get('name')} {p.get('ifOperStatus')} {p.get('speedLabel')} {p.get('utilPct'):.2f}% down={p.get('inMbps'):.2f} up={p.get('outMbps'):.2f}\") for p in ports]"
 ```
 
-Open:
-
-```text
-http://localhost:8088/api/topology
-```
-
-You should see JSON with:
-
-- `devices`
-- `links`
-- `ports`
-- `summary`
-
-## Common issues
-
-### Devices load but links are empty
-
-Enable LLDP/CDP on switches, UXG, and other network gear where supported.
-
-### Self-signed TLS error
-
-Set:
+## Links
 
 ```bash
-ALLOW_SELF_SIGNED_LIBRENMS=true
+curl -s http://localhost:8088/api/links | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f\"{l.get('localDeviceLabel')}:{l.get('localPortName')} -> {l.get('remoteDeviceLabel')}:{l.get('remotePortName')} {l.get('utilPct'):.2f}%\") for l in d['links']]"
 ```
 
-### No API data
+## If devices appear but links are empty
 
-Check:
-
-```bash
-curl http://localhost:8088/api/health
-```
+Enable LLDP/CDP on the switches/firewalls and confirm LibreNMS has discovered neighbors.

@@ -1,7 +1,7 @@
 {
   "name": "librenms-netmap-dashboard",
-  "version": "0.2.0",
-  "description": "Interactive LibreNMS-powered topology dashboard with vertical navigation.",
+  "version": "0.3.0",
+  "description": "Generic LibreNMS-powered interactive topology dashboard for enterprise switching, firewall, server, and wireless networks.",
   "main": "server.js",
   "type": "module",
   "scripts": {

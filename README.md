@@ -2,20 +2,25 @@
 
 Interactive LibreNMS-powered topology dashboard.
 
-This dashboard is designed for a layout where the **UXG is on the edge** and **Sophos sits in front of the server zone**. LibreNMS remains the data source; NetMap is the custom browser UI.
+NetMap is generalized for enterprise LibreNMS environments, including Juniper/Mist and Aruba switching environments. LibreNMS remains the data source; NetMap is the browser UI.
 
 ## What it does
 
 - Pulls devices from LibreNMS
 - Pulls discovered LLDP/CDP-style links from LibreNMS
-- Pulls port counters and utilization
-- Shows a browser-based topology map
+- Pulls real interface counters and utilization
+- Classifies common vendors and roles:
+  - Juniper / Juniper Mist
+  - Aruba / HPE Aruba CX
+  - UniFi
+  - Sophos
+  - core / distribution / access / wireless / server / firewall / edge
+- Shows an interactive topology map
 - Animates traffic links
-- Provides a vertical sidebar UI
+- Provides menu panels for Overview, Devices, Interfaces, Links, Alerts, and Settings
 - Keeps the LibreNMS API token on the backend
-- Supports mock/demo mode for UI testing without LibreNMS access
 
-## Quick start with Docker
+## Quick start
 
 ```bash
 cp .env.example .env
@@ -27,32 +32,6 @@ Open:
 
 ```text
 http://SERVER_IP:8088
-```
-
-## Local test mode
-
-To test the UI without LibreNMS:
-
-```bash
-cp .env.example .env
-```
-
-Set:
-
-```bash
-MOCK_MODE=true
-```
-
-Then:
-
-```bash
-docker compose up -d --build
-```
-
-Open:
-
-```text
-http://localhost:8088
 ```
 
 ## Live LibreNMS mode
@@ -71,39 +50,42 @@ If LibreNMS uses a self-signed certificate:
 ALLOW_SELF_SIGNED_LIBRENMS=true
 ```
 
-## API endpoints used
+## Interface data
 
-- `/api/v0/devices`
-- `/api/v0/resources/links`
-- `/api/v0/ports?columns=...`
-- `/api/v0/alerts?state=1`
+NetMap exposes interface data at:
 
-## Development workflow
-
-```bash
-git checkout -b ui-dev
-# edit files
-git add .
-git commit -m "Improve dashboard UI"
-git push -u origin ui-dev
+```text
+/api/interfaces
 ```
 
-For direct testing on main:
+The main topology payload also includes interface rows:
+
+```text
+/api/topology
+```
+
+## Classification tuning
+
+Edit `.env` to tune classification:
 
 ```bash
-git add .
-git commit -m "Build v2 interactive dashboard UI"
-git push
+CORE_SWITCH_MATCH=core,coresw,core-sw,dist,distribution,agg,aggregation,spine
+ACCESS_SWITCH_MATCH=access,access-sw,edge-sw,closet,idf,switch,sw-
+WIRELESS_MATCH=mist,ap-,aruba ap,access point,wifi,wireless
+JUNIPER_MATCH=juniper,ex2300,ex3400,ex4300,ex4400,ex4650,qfx,srx,mist,junos
+ARUBA_MATCH=aruba,procurve,hpe,2930,3810,5400,6200,6300,6400,8320,cx
+```
+
+## Updating on the server
+
+```bash
+cd NetMap
+git pull
+docker compose up -d --build
 ```
 
 ## Security
 
 Do not commit `.env`.
 
-Put the dashboard behind one of these before production:
-
-- VPN-only access
-- Internal VLAN only
-- Reverse proxy auth
-- SSO
-- Firewall allowlist
+Put the dashboard behind VPN, internal VLAN access, reverse proxy auth, SSO, or a firewall allowlist before production.

@@ -16,98 +16,51 @@
           <div class="brand-sub">LibreNMS UI</div>
         </div>
       </div>
-
       <nav class="nav">
-        <button class="nav-btn active" data-view="map"><span>⌁</span><b>Map</b></button>
-        <button class="nav-btn" data-view="overview"><span>◷</span><b>Overview</b></button>
-        <button class="nav-btn" data-view="devices"><span>▦</span><b>Devices</b></button>
-        <button class="nav-btn" data-view="links"><span>⇄</span><b>Links</b></button>
-        <button class="nav-btn" data-view="alerts"><span>⚠</span><b>Alerts</b><em id="navAlerts">0</em></button>
-        <button class="nav-btn" data-view="settings"><span>⚙</span><b>Settings</b></button>
+        <button class="nav-btn active" data-view="map"><span>~</span><b>Map</b></button>
+        <button class="nav-btn" data-view="overview"><span>O</span><b>Overview</b></button>
+        <button class="nav-btn" data-view="devices"><span>D</span><b>Devices</b></button>
+        <button class="nav-btn" data-view="interfaces"><span>I</span><b>Interfaces</b></button>
+        <button class="nav-btn" data-view="links"><span>L</span><b>Links</b></button>
+        <button class="nav-btn" data-view="alerts"><span>!</span><b>Alerts</b><em id="navAlerts">0</em></button>
+        <button class="nav-btn" data-view="settings"><span>S</span><b>Settings</b></button>
       </nav>
-
-      <section class="rail-card">
-        <div class="small-label">Live Status</div>
-        <div class="status-stack">
-          <div><i class="led good"></i><span id="railUp">0 up</span></div>
-          <div><i class="led bad"></i><span id="railDown">0 down</span></div>
-          <div><i class="led warn"></i><span id="railAlerts">0 alerts</span></div>
-        </div>
-      </section>
-
-      <section class="rail-card">
-        <div class="small-label">Traffic</div>
-        <div class="big-number" id="railTraffic">0 Mbps</div>
-        <div class="traffic-mini">
-          <span id="railIn">↓ 0</span>
-          <span id="railOut">↑ 0</span>
-        </div>
-      </section>
+      <section class="rail-card"><div class="small-label">Live Status</div><div class="status-stack"><div><i class="led good"></i><span id="railUp">0 up</span></div><div><i class="led bad"></i><span id="railDown">0 down</span></div><div><i class="led warn"></i><span id="railAlerts">0 alerts</span></div></div></section>
+      <section class="rail-card"><div class="small-label">Interfaces</div><div class="big-number" id="railPorts">0</div><div class="traffic-mini"><span id="railPortsUp">0 up</span><span id="railPortsDown">0 down</span></div></section>
+      <section class="rail-card"><div class="small-label">Traffic</div><div class="big-number" id="railTraffic">0 Mbps</div><div class="traffic-mini"><span id="railIn">down 0</span><span id="railOut">up 0</span></div></section>
     </aside>
-
     <main class="workspace">
       <header class="hero">
         <div>
           <div class="eyebrow"><span id="modeBadge">loading</span><span id="sourceBadge">LibreNMS</span></div>
-          <h1 id="title">DGE Sophos Enclave</h1>
-          <p id="subtitle">UXG edge, Sophos server-front, monitored by LibreNMS</p>
+          <h1 id="title">LibreNMS Network Fabric</h1>
+          <p id="subtitle">Enterprise topology, interface utilization, alerts, and device inventory</p>
         </div>
-
         <div class="actions">
-          <input id="searchBox" placeholder="Search devices, ports, IPs..." />
-          <select id="refreshInterval">
-            <option value="15000">15 sec</option>
-            <option value="30000" selected>30 sec</option>
-            <option value="60000">60 sec</option>
-            <option value="300000">5 min</option>
-          </select>
-          <button id="refreshBtn">Refresh</button>
-          <button id="fitBtn">Fit</button>
-          <button id="resetBtn">Reset layout</button>
+          <input id="searchBox" placeholder="Search devices, ports, vendors, IPs..." />
+          <select id="roleFilter" title="Filter map by role"><option value="">All roles</option><option value="edge">Edge</option><option value="firewall">Firewall</option><option value="core">Core / distribution</option><option value="access">Access switches</option><option value="wireless">Wireless</option><option value="server">Servers</option></select>
+          <select id="refreshInterval"><option value="15000">15 sec</option><option value="30000" selected>30 sec</option><option value="60000">60 sec</option><option value="300000">5 min</option></select>
+          <button id="refreshBtn">Refresh</button><button id="fitBtn">Fit</button><button id="resetBtn">Reset layout</button>
         </div>
       </header>
-
       <section class="kpis">
         <article class="kpi"><span>Total Devices</span><strong id="kpiDevices">0</strong><small id="kpiDevicesSub">0 up / 0 down</small></article>
+        <article class="kpi"><span>Interfaces</span><strong id="kpiPorts">0</strong><small id="kpiPortsSub">0 up / 0 down</small></article>
         <article class="kpi"><span>Discovered Links</span><strong id="kpiLinks">0</strong><small>LLDP/CDP resources</small></article>
-        <article class="kpi"><span>Traffic</span><strong id="kpiTraffic">0 Mbps</strong><small id="kpiTrafficSub">↓ 0 / ↑ 0</small></article>
+        <article class="kpi"><span>Traffic</span><strong id="kpiTraffic">0 Mbps</strong><small id="kpiTrafficSub">down 0 / up 0</small></article>
         <article class="kpi alert"><span>Active Alerts</span><strong id="kpiAlerts">0</strong><small>LibreNMS alert state</small></article>
       </section>
-
       <section class="main-grid">
         <div class="map-shell">
-          <div class="map-toolbar">
-            <span class="chip edge">UXG Edge</span>
-            <span class="chip firewall">Sophos Server Front</span>
-            <span class="chip server">Server Zone</span>
-            <span class="chip" id="lastUpdated">Waiting for data</span>
-          </div>
+          <div class="map-toolbar"><span class="chip edge">Edge / WAN</span><span class="chip firewall">Firewall</span><span class="chip core">Core / Distribution</span><span class="chip access">Access / IDF</span><span class="chip wireless">Wireless</span><span class="chip server">Server Zone</span><span class="chip" id="lastUpdated">Waiting for data</span></div>
           <div id="cy"></div>
-          <div class="legend">
-            <span><i style="background:#48d16f"></i>0-25%</span>
-            <span><i style="background:#c7df42"></i>25-50%</span>
-            <span><i style="background:#ffca3a"></i>50-75%</span>
-            <span><i style="background:#ff8f2a"></i>75-100%</span>
-            <span><i style="background:#ff4d5a"></i>100%+</span>
-          </div>
+          <div class="legend"><span><i style="background:#48d16f"></i>0-25%</span><span><i style="background:#c7df42"></i>25-50%</span><span><i style="background:#ffca3a"></i>50-75%</span><span><i style="background:#ff8f2a"></i>75-100%</span><span><i style="background:#ff4d5a"></i>100%+</span></div>
         </div>
-
-        <aside class="inspector">
-          <div class="inspector-head">
-            <div>
-              <h2 id="panelTitle">Map</h2>
-              <p id="panelSub">Click a device or link to inspect it.</p>
-            </div>
-            <span id="panelStatus" class="pill neutral">ready</span>
-          </div>
-          <div id="panelBody" class="panel-body"></div>
-        </aside>
+        <aside class="inspector"><div class="inspector-head"><div><h2 id="panelTitle">Map</h2><p id="panelSub">Click a device or link to inspect it.</p></div><span id="panelStatus" class="pill neutral">ready</span></div><div id="panelBody" class="panel-body"></div></aside>
       </section>
     </main>
   </div>
-
   <div id="toast" class="toast hidden"></div>
-
   <script src="/vendor/cytoscape.min.js"></script>
   <script src="/app.js"></script>
 </body>

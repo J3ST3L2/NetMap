@@ -277,7 +277,7 @@ button:hover {
 
 .kpis {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -582,3 +582,16 @@ button:hover {
     padding: 14px;
   }
 }
+
+.chip.core { color: var(--green); border-color: rgba(72, 209, 111, .36); }
+.chip.access { color: var(--lime); border-color: rgba(199, 223, 66, .36); }
+.chip.wireless { color: var(--cyan); border-color: rgba(53, 227, 255, .36); }
+.tag-row { display:flex; flex-wrap:wrap; gap:7px; margin:10px 0 14px; }
+.tag { color:var(--muted); border:1px solid var(--stroke); border-radius:999px; padding:5px 8px; font-size:12px; background:rgba(255,255,255,.035); }
+.table { display:grid; gap:8px; }
+.table-row { display:grid; grid-template-columns: 1.15fr .9fr .7fr .75fr .75fr .6fr; gap:10px; align-items:center; border:1px solid var(--stroke); background:rgba(255,255,255,.035); border-radius:14px; padding:10px; font-size:13px; }
+.table-row.header { color:var(--muted); background:transparent; border-color:transparent; text-transform:uppercase; letter-spacing:.9px; font-size:11px; }
+.table-row strong, .table-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.role-dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+@media (max-width: 1300px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 820px) { .table-row { grid-template-columns: 1fr; } }
